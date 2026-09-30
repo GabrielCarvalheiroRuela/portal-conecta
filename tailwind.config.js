@@ -45,9 +45,14 @@ export default {
           '0%': { opacity: '0', transform: 'translateY(6px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        sumir: {
+          '0%': { opacity: '1', scale: '1' },
+          '100%': { opacity: '0', scale: '1.8' },
+        },
       },
       animation: {
         'fade-in': 'fadeInUp .4s cubic-bezier(0.16, 1, 0.3, 1) both',
+        sumir: 'sumir .5s ease-out forwards',
       },
     },
   },

@@ -4,7 +4,7 @@ import { IconeLua, IconeSol } from './Icones'
 type Tema = 'claro' | 'escuro'
 
 const CHAVE = 'conecta.tema'
-const EVENTO = 'conecta:tema'
+export const EVENTO_TEMA = 'conecta:tema'
 
 function temaAtual(): Tema {
   return document.documentElement.classList.contains('dark') ? 'escuro' : 'claro'
@@ -31,15 +31,16 @@ function useTema(): [Tema, () => void] {
     }
     const sincronizar = () => setTema(temaAtual())
     midia.addEventListener('change', aoMudar)
-    window.addEventListener(EVENTO, sincronizar)
+    window.addEventListener(EVENTO_TEMA, sincronizar)
     return () => {
       midia.removeEventListener('change', aoMudar)
-      window.removeEventListener(EVENTO, sincronizar)
+      window.removeEventListener(EVENTO_TEMA, sincronizar)
     }
   }, [])
 
   function alternar() {
-    const novo: Tema = tema === 'escuro' ? 'claro' : 'escuro'
+    // Lê da página, não do estado: cliques muito rápidos chegam antes do React atualizar.
+    const novo: Tema = temaAtual() === 'escuro' ? 'claro' : 'escuro'
     document.documentElement.classList.toggle('dark', novo === 'escuro')
     try {
       localStorage.setItem(CHAVE, novo)
@@ -47,7 +48,7 @@ function useTema(): [Tema, () => void] {
       // armazenamento bloqueado: vale só até recarregar
     }
     setTema(novo)
-    window.dispatchEvent(new Event(EVENTO))
+    window.dispatchEvent(new Event(EVENTO_TEMA))
   }
 
   return [tema, alternar]

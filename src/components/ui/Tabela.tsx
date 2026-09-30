@@ -46,6 +46,8 @@ const MARCAS: {
   { chave: 'convertize', principal: '#F05A38', secundaria: '#263845', texto: '#C7401F', secundariaEscuro: '#9FB1BE', textoEscuro: '#FF8E70' },
 ]
 
+export const CORES_DAS_MARCAS = MARCAS.map((m) => ({ nome: m.chave, cor: m.principal }))
+
 function marcaDaPlataforma(nome: string) {
   const normalizado = nome.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]/g, '')
   return MARCAS.find((m) => normalizado.includes(m.chave))
@@ -323,7 +325,10 @@ export function EstadoVazio({
   }[tom]
   return (
     <div className="flex flex-col items-center px-5 py-16 text-center animate-fade-in">
-      <div className={`flex h-12 w-12 items-center justify-center rounded-xl shadow-soft ring-1 ring-inset ${cores}`}>
+      <div
+        data-segredo={tom === 'sucesso' ? 'cafe' : undefined}
+        className={`flex h-12 w-12 items-center justify-center rounded-xl shadow-soft ring-1 ring-inset ${cores}`}
+      >
         <span className="h-6 w-6">{icone}</span>
       </div>
       {titulo && <h4 className="mt-4 text-[15px] font-semibold tracking-tight text-slate-900">{titulo}</h4>}

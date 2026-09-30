@@ -10,6 +10,7 @@ import { registrarExpiracao, sair, temSessao, usuarioDaSessao } from './services
 import type { IntegracaoCriada } from './types/integracao'
 import { MenuUsuario } from './components/MenuUsuario'
 import { AlternarTema } from './components/ui/AlternarTema'
+import { Segredos } from './segredos/Segredos'
 import { IconeAtividade, IconeCamadas, IconeLink, IconeMais } from './components/ui/Icones'
 
 type Aba = 'monitoramento' | 'integracao' | 'consulta' | 'plataformas'
@@ -70,15 +71,18 @@ export default function App() {
 
   if (!autenticado) {
     return (
-      <TelaLogin
-        aviso={avisoLogin}
-        aoEntrar={() => {
-          setAvisoLogin(null)
-          // Todo login começa pelo monitoramento.
-          setAba('monitoramento')
-          setAutenticado(true)
-        }}
-      />
+      <>
+        <TelaLogin
+          aviso={avisoLogin}
+          aoEntrar={() => {
+            setAvisoLogin(null)
+            // Todo login começa pelo monitoramento.
+            setAba('monitoramento')
+            setAutenticado(true)
+          }}
+        />
+        <Segredos />
+      </>
     )
   }
 
@@ -96,7 +100,7 @@ export default function App() {
       <aside className="escuro-fixo bg-ink-900 lg:fixed lg:inset-y-0 lg:left-0 lg:z-20 lg:flex lg:w-64 lg:flex-col lg:border-r lg:border-white/[0.06]">
         <div className="flex h-16 items-center justify-between gap-3 px-5 lg:border-b lg:border-white/[0.06]">
           <div className="flex items-center gap-3">
-            <img src="/conecta_logo.png" alt="Conecta" className="h-8 w-auto object-contain" />
+            <img src="/conecta_logo.png" alt="Conecta" data-segredo="logo" className="h-8 w-auto object-contain" />
             <div className="leading-tight">
               <p className="text-sm font-semibold tracking-tight text-white">Portal Conecta</p>
               <p className="text-[11px] font-medium text-slate-500">Integrações Citel</p>
@@ -162,7 +166,10 @@ export default function App() {
       <main className="px-4 py-8 sm:px-8 lg:px-10 lg:py-10">
         <div className="mx-auto max-w-7xl">
           <header key={aba} className="mb-8 animate-fade-in">
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-[28px] sm:leading-9">
+            <h1
+              data-segredo={aba === 'monitoramento' ? 'titulo' : undefined}
+              className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-[28px] sm:leading-9"
+            >
               {atual.rotulo}
             </h1>
             <p className="mt-1.5 max-w-2xl text-sm text-slate-500">{atual.descricao}</p>
@@ -208,6 +215,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      <Segredos />
     </div>
   )
 }
