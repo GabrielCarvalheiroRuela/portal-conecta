@@ -82,6 +82,8 @@ function filtrar<T extends ItemFiltravel>(itens: T[], filtros: Filtros, codigoDe
 }
 
 const chaveProduto = (p: ProdutoComErro) => p.id ?? `${p.cliente}|${p.codigoProduto}`
+// O codigoPedido se repete entre clientes (ex.: TRY_001_001_1745 em dois lojistas da Tray), então não serve de chave sozinho.
+const chavePedido = (p: PedidoComErro) => `${p.cliente}|${p.plataforma ?? ''}|${p.codigoPedido}`
 
 /**
  * Monitoramento das integrações: pedidos e produtos que falharam, atualizados a cada 10s.
@@ -108,7 +110,7 @@ export function Monitoramento() {
       const buscaPedidos = apiGet<PedidoComErro[]>('/pendentes?status=2')
         .then((recebidos) => {
           if (!ativo) return
-          setPedidos((atual) => mesclar(atual, recebidos, (p) => p.codigoPedido))
+          setPedidos((atual) => mesclar(atual, recebidos, chavePedido))
           setTotalPedidos(recebidos.length)
           setUltimaAtualizacao(new Date())
         })
@@ -358,7 +360,7 @@ export function Monitoramento() {
           <Tabela colunas={colunas}>
             {ehPedidos
               ? pedidosFiltrados.map((p) => (
-                  <Linha key={p.codigoPedido}>
+                  <Linha key={chavePedido(p)}>
                     <CelulaCliente nome={p.cliente} />
                     <Celula className="whitespace-nowrap">
                       <EtiquetaPlataforma nome={p.plataforma} />
