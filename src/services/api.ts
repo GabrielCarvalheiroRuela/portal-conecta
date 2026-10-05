@@ -171,7 +171,9 @@ async function enviar(caminho: string, init: RequestInit, base: string): Promise
 
   // Sem credencial guardada não há como renovar sozinho: o servidor pode ter reiniciado com outro
   // segredo, ou o relógio local estar adiantado. Em qualquer caso, é relogar.
-  if (resposta.status === 401) {
+  // Só vale para a API do Monint: um 401 do n8n (/acesso, /wf) não diz que a sessão acabou — pode ser
+  // o n8n validando o token em outra API —, então vira um erro comum e a pessoa segue logada.
+  if (resposta.status === 401 && base === BASE) {
     derrubarSessao()
   }
 
