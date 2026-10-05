@@ -10,6 +10,10 @@ interface ImportMetaEnv {
   /** Só em desenvolvimento: usuário e senha do POST /Autenticar para o login sem Google. */
   readonly VITE_MONINT_USER?: string
   readonly VITE_MONINT_PASS?: string
+  /** Só em desenvolvimento: recursos restritos (separados por vírgula) que a tela mostra sem consultar a lista. */
+  readonly VITE_RECURSOS_DEV?: string
+  /** Só em desenvolvimento: ADMIN faz a tela tratar quem entrou como admin (as abas de admin aparecem). */
+  readonly VITE_PERFIL_DEV?: string
 }
 
 interface ImportMeta {

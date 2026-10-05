@@ -75,6 +75,75 @@ grep -c "gsi/client" dist/assets/*.js
 
 Tem que devolver `1`. Se devolver `0`, o bundle saiu sem o Google.
 
+## Perfil de usuário (admin e comum)
+
+O usuário interno tem um perfil no `CADUSR` (`USR_PERFIL`: `ADMIN` ou `USUARIO`, padrão `USUARIO`). Quem é
+admin é dado do banco, marcado com `UPDATE` (script em `monitoramento-pedpen/sql/001_cadusr_perfil.sql`);
+o login pelo Google nunca promove nem rebaixa ninguém.
+
+- **API:** `POST /plataformas`, `POST /integracoes` e `GET /clientes` respondem **403** ao usuário interno
+  sem perfil ADMIN. Lojistas (o n8n) e admins passam como antes, e `POST /cadastro` continua aberto.
+- **Token:** o login devolve o claim `perfil`. A tela o lê em `ehAdmin()` (`src/services/api.ts`) e **esconde**
+  as abas **Plataformas**, **Nova integração** e **Workflows** de quem não é admin.
+- **Esconder não protege:** quem barra é a API (e o n8n, na aba Workflows). O token reflete o perfil do
+  momento do login, então quem foi promovido precisa entrar de novo para ver as abas.
+- **Desenvolvimento:** `VITE_PERFIL_DEV=ADMIN` no `.env` mostra as abas de admin no `npm run dev`, só visualmente.
+
+## Controle de acesso por recurso
+
+A aba **Workflows** exige, além de ser admin, estar na lista do n8n. Quem decide não é a tela:
+
+1. Ao entrar, o portal chama `GET /acesso` com o JWT do Monint.
+2. O nginx repassa ao webhook `portal-acesso` do n8n (workflow **Portal_Acesso**).
+3. O n8n repassa o mesmo JWT ao Monint (`GET /plataformas`) — só passa token que o Monint aceita —,
+   lê o e-mail do `sub` e consulta a Data Table `portal_acessos` (colunas `email` e `recurso`, uma
+   linha por pessoa e recurso).
+4. Responde `{ email, recursos: [...] }`. A aba só aparece se o recurso dela estiver na lista.
+
+**Para liberar alguém:** adicione uma linha em `portal_acessos` no n8n, com o `email` em minúsculas e
+`recurso` = `workflows`. Não precisa de deploy.
+
+**Esconder a aba não protege nada sozinho.** Todo endpoint que entregar dado restrito tem de repetir
+a checagem no servidor: `GET /acesso?recurso=workflows` responde 403 sem permissão e 401 com token
+inválido. Para trancar uma rota da API do Monint, aponte um `auth_request` do nginx para esse mesmo
+endpoint.
+
+Se o n8n cair ou o webhook não estiver publicado, o portal segue funcionando, só sem as abas
+restritas. Em desenvolvimento, `VITE_N8N_TARGET` aponta para o n8n que tem o workflow.
+
+Para mexer na tela sem estar na tabela, `VITE_RECURSOS_DEV=workflows` no `.env` mostra a aba no
+`npm run dev`. Isso é só visual: os dados continuam sendo checados no n8n e quem não está na tabela
+recebe 403. No build de produção a variável é ignorada.
+
+### Aba Workflows (exportação)
+
+Escolhe a instância do n8n, filtra por cliente, base e/ou trecho do nome (com prévia da lista) e baixa
+um ZIP com um `.json` por workflow. Tudo passa pelo
+webhook `portal-wf` do n8n (workflow **Portal_WF_Exportar**, `/wf` no nginx e no Vite):
+
+Os nomes seguem `Cliente_Base_Etapa` (ex.: `LAB_Mercos_Pedido_Captura`): o **cliente** é a parte antes
+do primeiro `_` e a **base** é a segunda. Os filtros `cliente`, `base` e `busca` (trecho do nome) se
+combinam, sem diferenciar maiúsculas, e a exportação exige ao menos um. Só a base pega a mesma base de
+todos os clientes.
+
+- `GET /wf?acao=instancias` — instâncias disponíveis (apelido e nome).
+- `GET /wf?acao=clientes&instancia=dev` — as opções dos filtros: clientes e bases, cada uma com a
+  quantidade de workflows.
+- `GET /wf?acao=previa&instancia=dev&base=Mercos` — o total e os workflows que casam (`id` e `nome`,
+  até 300).
+- `GET /wf?acao=exportar&instancia=dev&ids=ID1,ID2` — o ZIP com exatamente esses workflows (até 300).
+  A seleção é por ID porque o n8n aceita nomes repetidos; IDs malformados, repetidos ou de
+  arquivados são ignorados.
+
+Na tela há duas listas: o **resultado do filtro**, que muda a cada busca, e a lista **para exportar**,
+que acumula entre buscas (adicione um a um ou todos do resultado, e remova o que não quiser). O ZIP leva
+a segunda. Trocar de instância zera as duas.
+
+As três repetem a checagem do `Portal_Acesso` (recurso `workflows`). A instância vai por apelido e a
+credencial de cada uma fica só no n8n. Workflows arquivados não entram. Os JSONs podem ter senhas em
+texto puro nos nodes, por isso cada exportação é registrada na tabela `portal_wf_log` com o e-mail,
+a instância, a quantidade e os nomes exportados.
+
 ## Build e publicação
 
 ```bash

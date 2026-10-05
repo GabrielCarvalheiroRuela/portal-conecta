@@ -1,11 +1,12 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// O proxy de /api existe só em desenvolvimento, para não esbarrar em CORS.
-// Em produção quem faz esse papel é o location /api/ do nginx.conf.
+// Os proxies de /api, /acesso e /wf existem só em desenvolvimento, para não esbarrar em CORS.
+// Em produção quem faz esse papel são os locations do nginx.conf.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const target = env.VITE_API_TARGET || 'http://localhost:3001'
+  const n8n = env.VITE_N8N_TARGET || 'https://automakerdev.citelsoftware.com.br'
 
   return {
     plugins: [react()],
@@ -17,6 +18,18 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/api/, ''),
+        },
+        '/acesso': {
+          target: n8n,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/acesso/, '/webhook/portal-acesso'),
+        },
+        '/wf': {
+          target: n8n,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/wf/, '/webhook/portal-wf'),
         },
       },
     },
