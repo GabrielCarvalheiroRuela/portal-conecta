@@ -72,6 +72,22 @@ export function usuarioDaSessao(): string | null {
   return claim<string>('sub')
 }
 
+/**
+ * Se o usuário interno é admin, lido do claim "perfil" do token (ADMIN ou USUARIO).
+ *
+ * Serve só para a tela decidir o que exibir: a API confere o perfil no banco a cada chamada e
+ * responde 403 a quem não pode, então esconder a aba não protege nada sozinho. O token reflete o
+ * perfil do momento do login; quem foi promovido precisa entrar de novo para ver as abas. Token sem
+ * o claim (lojista ou emitido antes dele existir) conta como não-admin.
+ *
+ * No `npm run dev`, VITE_PERFIL_DEV=ADMIN força o resultado para dar para mexer nas telas.
+ */
+export function ehAdmin(): boolean {
+  const forcadoNoDev = import.meta.env.DEV ? import.meta.env.VITE_PERFIL_DEV : undefined
+  const perfil = forcadoNoDev || claim<string>('perfil')
+  return perfil?.trim().toUpperCase() === 'ADMIN'
+}
+
 export function sair() {
   token = null
   sessionStorage.removeItem(CHAVE_TOKEN)
@@ -139,12 +155,13 @@ function derrubarSessao(): never {
   throw new SessaoExpiradaError()
 }
 
-async function requisitar<T>(caminho: string, init: RequestInit): Promise<T> {
+/** Faz a chamada autenticada e devolve a resposta já validada (2xx); erros viram ApiError. */
+async function enviar(caminho: string, init: RequestInit, base: string): Promise<Response> {
   if (!tokenAindaVale()) {
     derrubarSessao()
   }
 
-  const resposta = await fetch(`${BASE}${caminho}`, {
+  const resposta = await fetch(`${base}${caminho}`, {
     ...init,
     headers: {
       ...init.headers,
@@ -154,13 +171,21 @@ async function requisitar<T>(caminho: string, init: RequestInit): Promise<T> {
 
   // Sem credencial guardada não há como renovar sozinho: o servidor pode ter reiniciado com outro
   // segredo, ou o relógio local estar adiantado. Em qualquer caso, é relogar.
-  if (resposta.status === 401) {
+  // Só vale para a API do Monint: um 401 do n8n (/acesso, /wf) não diz que a sessão acabou — pode ser
+  // o n8n validando o token em outra API —, então vira um erro comum e a pessoa segue logada.
+  if (resposta.status === 401 && base === BASE) {
     derrubarSessao()
   }
 
   if (!resposta.ok) {
     throw new ApiError(resposta.status, await mensagemDeErro(resposta))
   }
+
+  return resposta
+}
+
+async function requisitar<T>(caminho: string, init: RequestInit, base = BASE): Promise<T> {
+  const resposta = await enviar(caminho, init, base)
 
   if (resposta.status === 204) {
     return undefined as T
@@ -169,8 +194,17 @@ async function requisitar<T>(caminho: string, init: RequestInit): Promise<T> {
   return (await resposta.json()) as T
 }
 
-export function apiGet<T>(caminho: string): Promise<T> {
-  return requisitar<T>(caminho, { method: 'GET' })
+/** `base` troca o prefixo do proxy (padrão `/api`, a API do Monint); o JWT segue no mesmo header. */
+export function apiGet<T>(caminho: string, base?: string): Promise<T> {
+  return requisitar<T>(caminho, { method: 'GET' }, base)
+}
+
+/** Baixa um arquivo (ex.: ZIP). O nome vem do Content-Disposition, quando o servidor informa. */
+export async function apiBaixar(caminho: string, base?: string): Promise<{ blob: Blob; nomeArquivo: string | null }> {
+  const resposta = await enviar(caminho, { method: 'GET' }, base ?? BASE)
+  const disposicao = resposta.headers.get('Content-Disposition') ?? ''
+  const nome = /filename="?([^";]+)"?/i.exec(disposicao)?.[1] ?? null
+  return { blob: await resposta.blob(), nomeArquivo: nome }
 }
 
 export function apiPost<T>(caminho: string, corpo: unknown): Promise<T> {

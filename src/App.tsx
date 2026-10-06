@@ -6,16 +6,28 @@ import { ListaPlataformas } from './components/ListaPlataformas'
 import { Monitoramento } from './components/Monitoramento'
 import { PainelSucesso } from './components/PainelSucesso'
 import { TelaLogin } from './components/TelaLogin'
-import { registrarExpiracao, sair, temSessao, usuarioDaSessao } from './services/api'
+import { ExportarWorkflows } from './components/ExportarWorkflows'
+import { ehAdmin, registrarExpiracao, sair, temSessao, usuarioDaSessao } from './services/api'
+import { carregarRecursos, type Recurso } from './services/acesso'
 import type { IntegracaoCriada } from './types/integracao'
 import { MenuUsuario } from './components/MenuUsuario'
 import { AlternarTema } from './components/ui/AlternarTema'
 import { Segredos } from './segredos/Segredos'
-import { IconeAtividade, IconeCamadas, IconeLink, IconeMais } from './components/ui/Icones'
+import { IconeAtividade, IconeCamadas, IconeCaixa, IconeLink, IconeMais } from './components/ui/Icones'
 
-type Aba = 'monitoramento' | 'integracao' | 'consulta' | 'plataformas'
+type Aba = 'monitoramento' | 'integracao' | 'consulta' | 'plataformas' | 'workflows'
 
-const ABAS: { id: Aba; rotulo: string; descricao: string; Icone: () => JSX.Element }[] = [
+// `somenteAdmin` esconde a aba de quem não tem o perfil ADMIN (USR_PERFIL, claim "perfil" do token).
+// `recurso` a restringe também à lista do n8n (veja services/acesso.ts). Esconder é só conforto: a API
+// e o n8n barram de verdade, com 403.
+const ABAS: {
+  id: Aba
+  rotulo: string
+  descricao: string
+  Icone: () => JSX.Element
+  somenteAdmin?: boolean
+  recurso?: Recurso
+}[] = [
   {
     id: 'monitoramento',
     rotulo: 'Monitoramento',
@@ -27,18 +39,28 @@ const ABAS: { id: Aba; rotulo: string; descricao: string; Icone: () => JSX.Eleme
     rotulo: 'Plataformas',
     descricao: 'Cadastre as plataformas que ficam disponíveis no seletor de Nova integração.',
     Icone: IconeCamadas,
+    somenteAdmin: true,
   },
   {
     id: 'integracao',
     rotulo: 'Nova integração',
     descricao: 'Vincule uma plataforma a um lojista do Monint. Um mesmo lojista pode ter várias integrações.',
     Icone: IconeMais,
+    somenteAdmin: true,
   },
   {
     id: 'consulta',
     rotulo: 'Integrações',
     descricao: 'Integrações cadastradas por lojista. Clique no nome de um lojista para ver os pedidos dele.',
     Icone: IconeLink,
+  },
+  {
+    id: 'workflows',
+    rotulo: 'Workflows',
+    descricao: 'Exportação dos workflows do n8n por instância e cliente. Restrito ao time de integrações.',
+    Icone: IconeCaixa,
+    somenteAdmin: true,
+    recurso: 'workflows',
   },
 ]
 
@@ -48,6 +70,7 @@ const LARGURA: Record<Aba, string> = {
   consulta: 'max-w-none',
   integracao: 'max-w-5xl',
   plataformas: 'max-w-6xl',
+  workflows: 'max-w-5xl',
 }
 
 export default function App() {
@@ -60,6 +83,8 @@ export default function App() {
   const [versaoLojistas, setVersaoLojistas] = useState(0)
   const [versaoIntegracoes, setVersaoIntegracoes] = useState(0)
   const [versaoPlataformas, setVersaoPlataformas] = useState(0)
+  // Recursos restritos liberados para quem está logado; vazio até o n8n responder.
+  const [recursos, setRecursos] = useState<string[]>([])
 
   useEffect(() => {
     registrarExpiracao(() => {
@@ -68,6 +93,22 @@ export default function App() {
     })
     return () => registrarExpiracao(null)
   }, [])
+
+  useEffect(() => {
+    if (!autenticado) {
+      setRecursos([])
+      return
+    }
+    let ativo = true
+    carregarRecursos().then((liberados) => {
+      if (ativo) {
+        setRecursos(liberados)
+      }
+    })
+    return () => {
+      ativo = false
+    }
+  }, [autenticado])
 
   if (!autenticado) {
     return (
@@ -93,7 +134,11 @@ export default function App() {
   }
 
   const usuario = usuarioDaSessao()
-  const atual = ABAS.find((a) => a.id === aba) ?? ABAS[0]
+  const admin = ehAdmin()
+  const abasVisiveis = ABAS.filter(
+    (a) => (!a.somenteAdmin || admin) && (!a.recurso || recursos.includes(a.recurso)),
+  )
+  const atual = abasVisiveis.find((a) => a.id === aba) ?? ABAS[0]
 
   return (
     <div className="min-h-screen bg-slate-50 lg:pl-64">
@@ -120,7 +165,7 @@ export default function App() {
           aria-label="Seções do portal"
           className="flex gap-1 overflow-x-auto px-3 pb-3 [scrollbar-width:none] lg:flex-1 lg:flex-col lg:overflow-visible lg:pb-0 [&::-webkit-scrollbar]:hidden"
         >
-          {ABAS.map(({ id, rotulo, Icone }) => {
+          {abasVisiveis.map(({ id, rotulo, Icone }) => {
             const ativa = aba === id
             return (
               <button
@@ -183,21 +228,24 @@ export default function App() {
               </div>
             )}
 
-            <div hidden={aba !== 'integracao'} className="animate-fade-in">
-              {criada ? (
-                <PainelSucesso integracao={criada} aoCadastrarOutra={() => setCriada(null)} />
-              ) : (
-                <FormIntegracao
-                  versaoLojistas={versaoLojistas}
-                  versaoPlataformas={versaoPlataformas}
-                  aoCriarLojista={() => setVersaoLojistas((v) => v + 1)}
-                  aoCriar={(integracao) => {
-                    setCriada(integracao)
-                    setVersaoIntegracoes((v) => v + 1)
-                  }}
-                />
-              )}
-            </div>
+            {/* Fica montado ao trocar de aba (não perde o que foi digitado), mas só para admin. */}
+            {admin && (
+              <div hidden={aba !== 'integracao'} className="animate-fade-in">
+                {criada ? (
+                  <PainelSucesso integracao={criada} aoCadastrarOutra={() => setCriada(null)} />
+                ) : (
+                  <FormIntegracao
+                    versaoLojistas={versaoLojistas}
+                    versaoPlataformas={versaoPlataformas}
+                    aoCriarLojista={() => setVersaoLojistas((v) => v + 1)}
+                    aoCriar={(integracao) => {
+                      setCriada(integracao)
+                      setVersaoIntegracoes((v) => v + 1)
+                    }}
+                  />
+                )}
+              </div>
+            )}
 
             {/* A consulta só monta quando aberta, para não buscar a lista à toa. */}
             {aba === 'consulta' && (
@@ -206,10 +254,16 @@ export default function App() {
               </div>
             )}
 
-            {aba === 'plataformas' && (
+            {admin && aba === 'plataformas' && (
               <div className="grid items-start gap-6 animate-fade-in lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
                 <FormPlataforma aoCriar={() => setVersaoPlataformas((v) => v + 1)} />
                 <ListaPlataformas versao={versaoPlataformas} />
+              </div>
+            )}
+
+            {admin && aba === 'workflows' && recursos.includes('workflows') && (
+              <div className="animate-fade-in">
+                <ExportarWorkflows />
               </div>
             )}
           </div>
