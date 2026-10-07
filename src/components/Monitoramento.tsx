@@ -1,8 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { apiGet } from '../services/api'
-import type { PedidoComErro, ProdutoComErro } from '../types/monitoramento'
-import { IconeCaixa, IconeCheck, IconeEtiqueta, IconeLupa, IconePessoas } from './ui/Icones'
 import {
+  assinarFilas,
+  iniciarSincronizacaoAutomatica,
+  lerEstadoFilas,
+  sincronizarFilas,
+} from '../services/filas'
+import { classificarClientes } from '../types/filas'
+import type { PedidoComErro, ProdutoComErro } from '../types/monitoramento'
+import { PainelFilas } from './PainelFilas'
+import { IconeAlerta, IconeCaixa, IconeCheck, IconeEtiqueta, IconeLupa, IconePessoas } from './ui/Icones'
+import {
+  BotaoAtualizar,
   BotaoLimpar,
   CampoBusca,
   Carregando,
@@ -17,7 +26,7 @@ import {
   Tabela,
 } from './ui/Tabela'
 
-type SubAba = 'pedidos' | 'produtos'
+type SubAba = 'pedidos' | 'produtos' | 'filas'
 
 const INTERVALO_ATUALIZACAO_MS = 10_000
 
@@ -86,8 +95,8 @@ const chaveProduto = (p: ProdutoComErro) => p.id ?? `${p.cliente}|${p.codigoProd
 const chavePedido = (p: PedidoComErro) => `${p.cliente}|${p.plataforma ?? ''}|${p.codigoPedido}`
 
 /**
- * Monitoramento das integrações: pedidos e produtos que falharam, atualizados a cada 10s.
- * Somente leitura. Usa a mesma sessão do portal (JWT do Monint).
+ * Monitoramento das integrações: pedidos e produtos que falharam, atualizados a cada 10s, e as filas
+ * de processamento por cliente, coletadas pelo n8n a cada 5 minutos. Somente leitura. Usa a mesma sessão do portal (JWT do Monint).
  */
 export function Monitoramento() {
   const [subAba, setSubAba] = useState<SubAba>('pedidos')
@@ -102,6 +111,16 @@ export function Monitoramento() {
 
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS)
   const primeiraCarga = useRef(true)
+
+  // O retrato das filas vive no serviço, não aqui: ao trocar de tela e voltar, o último retrato
+  // continua na tela e a coleta só acontece quando passam 5 minutos ou a pessoa pede.
+  const {
+    retrato: retratoFilas,
+    falha: falhaFilas,
+    sincronizando,
+  } = useSyncExternalStore(assinarFilas, lerEstadoFilas)
+
+  useEffect(() => iniciarSincronizacaoAutomatica(), [])
 
   useEffect(() => {
     let ativo = true
@@ -144,7 +163,13 @@ export function Monitoramento() {
     }
   }, [])
 
-  const dadosDaAba: ItemFiltravel[] = subAba === 'pedidos' ? pedidos : produtos
+  const linhasFilas = useMemo(() => classificarClientes(retratoFilas), [retratoFilas])
+  const clientesComFilaEmAtencao = useMemo(
+    () => linhasFilas.filter((l) => l.filasEmAtencao.length > 0).length,
+    [linhasFilas],
+  )
+
+  const dadosDaAba: ItemFiltravel[] = subAba === 'produtos' ? produtos : pedidos
 
   const clientes = useMemo(
     () => Array.from(new Set(dadosDaAba.map((i) => i.cliente))).sort(),
@@ -180,7 +205,7 @@ export function Monitoramento() {
     setFiltros((f) => ({ ...f, [campo]: valor }))
   }
 
-  const ehPedidos = subAba === 'pedidos'
+  const ehPedidos = subAba !== 'produtos'
   const total = ehPedidos ? totalPedidos : totalProdutos
   const semErros = (ehPedidos ? pedidos : produtos).length === 0
   const visiveis = ehPedidos ? pedidosFiltrados.length : produtosFiltrados.length
@@ -203,91 +228,138 @@ export function Monitoramento() {
     { rotulo: 'Rotina' },
   ]
 
-  return (
-    <div className="space-y-6">
-      {/* Resumo */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <CartaoResumo
-          rotulo="Pedidos com erro"
-          valor={totalPedidos}
-          destaque={totalPedidos > 0}
-          legenda={totalPedidos > 0 ? 'Aguardando correção' : 'Tudo processado'}
-          icone={<IconeCaixa />}
-        />
-        <CartaoResumo
-          rotulo="Produtos com erro"
-          valor={totalProdutos}
-          destaque={totalProdutos > 0}
-          legenda={totalProdutos > 0 ? 'Aguardando correção' : 'Tudo processado'}
-          icone={<IconeEtiqueta />}
-        />
-        <CartaoResumo
-          rotulo="Clientes afetados"
-          valor={clientesAfetados}
-          legenda="Com pedido ou produto em erro"
-          icone={<IconePessoas />}
-        />
+  const emFilas = subAba === 'filas'
+  // As filas usam amarelo ("atenção"): ainda não é falha, é volume acima do normal.
+  const abas = [
+    { id: 'pedidos', rotulo: 'Pedidos', contador: totalPedidos, icone: <IconeCaixa />, tom: 'erro' },
+    { id: 'produtos', rotulo: 'Produtos', contador: totalProdutos, icone: <IconeEtiqueta />, tom: 'erro' },
+    { id: 'filas', rotulo: 'Filas', contador: clientesComFilaEmAtencao, icone: <IconeAlerta />, tom: 'atencao' },
+  ] as const
+
+  const cabecalho = (
+    <>
+      <div className="inline-flex rounded-lg bg-slate-100 p-1" role="tablist">
+        {abas.map(({ id, rotulo, contador, icone, tom }) => {
+          const ativa = subAba === id
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={ativa}
+              onClick={() => trocarSubAba(id)}
+              title={id === 'filas' ? 'Clientes com alguma fila acima do limite' : undefined}
+              className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all duration-150 ${
+                ativa
+                  ? 'bg-surface text-slate-900 shadow-soft ring-1 ring-slate-200/80 dark:bg-slate-200 dark:ring-slate-300/60'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <span className={`h-4 w-4 ${ativa ? 'text-brand-600' : ''}`}>{icone}</span>
+              {rotulo}
+              <span
+                className={`min-w-[1.5rem] rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                  contador === 0
+                    ? 'bg-slate-200/70 text-slate-500'
+                    : tom === 'atencao'
+                      ? ativa
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-amber-100 text-amber-700'
+                      : ativa
+                        ? 'bg-red-500 text-white'
+                        : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {contador}
+              </span>
+            </button>
+          )
+        })}
       </div>
 
-      <CartaoConsulta
-        cabecalho={
-          <>
-            <div className="inline-flex rounded-lg bg-slate-100 p-1" role="tablist">
-              {(
-                [
-                  { id: 'pedidos', rotulo: 'Pedidos', contador: totalPedidos, icone: <IconeCaixa /> },
-                  { id: 'produtos', rotulo: 'Produtos', contador: totalProdutos, icone: <IconeEtiqueta /> },
-                ] as const
-              ).map(({ id, rotulo, contador, icone }) => {
-                const ativa = subAba === id
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    role="tab"
-                    aria-selected={ativa}
-                    onClick={() => trocarSubAba(id)}
-                    className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all duration-150 ${
-                      ativa
-                        ? 'bg-surface text-slate-900 shadow-soft ring-1 ring-slate-200/80 dark:bg-slate-200 dark:ring-slate-300/60'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <span className={`h-4 w-4 ${ativa ? 'text-brand-600' : ''}`}>{icone}</span>
-                    {rotulo}
-                    <span
-                      className={`min-w-[1.5rem] rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
-                        contador === 0
-                          ? 'bg-slate-200/70 text-slate-500'
-                          : ativa
-                            ? 'bg-red-500 text-white'
-                            : 'bg-red-100 text-red-700'
-                      }`}
-                    >
-                      {contador}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+      <div className="flex flex-wrap items-center gap-3">
+      {emFilas && (
+        <BotaoAtualizar
+          onClick={() => void sincronizarFilas()}
+          carregando={sincronizando}
+          rotulo="Sincronizar filas"
+          rotuloCarregando="Sincronizando…"
+        />
+      )}
+      <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+        </span>
+        <span>
+          {emFilas ? 'Coleta a cada 5 min' : 'Ao vivo · a cada 10s'}
+          {(emFilas ? retratoFilas?.geradoEm : ultimaAtualizacao) && (
+            <span className="text-emerald-600/70 tabular-nums">
+              {' '}
+              · {new Date((emFilas ? retratoFilas?.geradoEm : ultimaAtualizacao) as string | Date).toLocaleTimeString('pt-BR')}
+            </span>
+          )}
+        </span>
+      </div>
+      </div>
+    </>
+  )
 
-            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              <span>
-                Ao vivo · a cada 10s
-                {ultimaAtualizacao && (
-                  <span className="text-emerald-600/70 tabular-nums">
-                    {' '}
-                    · {ultimaAtualizacao.toLocaleTimeString('pt-BR')}
-                  </span>
-                )}
-              </span>
-            </div>
-          </>
+  const resumo = (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <CartaoResumo
+        rotulo="Pedidos com erro"
+        valor={totalPedidos}
+        destaque={totalPedidos > 0}
+        legenda={totalPedidos > 0 ? 'Aguardando correção' : 'Tudo processado'}
+        icone={<IconeCaixa />}
+      />
+      <CartaoResumo
+        rotulo="Produtos com erro"
+        valor={totalProdutos}
+        destaque={totalProdutos > 0}
+        legenda={totalProdutos > 0 ? 'Aguardando correção' : 'Tudo processado'}
+        icone={<IconeEtiqueta />}
+      />
+      <CartaoResumo
+        rotulo="Clientes afetados"
+        valor={clientesAfetados}
+        legenda="Com pedido ou produto em erro"
+        icone={<IconePessoas />}
+      />
+      <CartaoResumo
+        rotulo="Filas em atenção"
+        valor={clientesComFilaEmAtencao}
+        destaque={clientesComFilaEmAtencao > 0}
+        tom="atencao"
+        legenda={
+          clientesComFilaEmAtencao > 0 ? 'Clientes com fila acima do limite' : 'Todas as filas dentro do limite'
         }
+        icone={<IconeAlerta />}
+      />
+    </div>
+  )
+
+  if (emFilas) {
+    return (
+      <div className="space-y-6">
+        {resumo}
+        <PainelFilas
+          cabecalho={cabecalho}
+          linhas={linhasFilas}
+          coletado={retratoFilas !== null && !!retratoFilas.geradoEm}
+          indisponivel={falhaFilas && retratoFilas === null}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {resumo}
+
+      <CartaoConsulta
+        cabecalho={cabecalho}
         filtros={
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_1.3fr_auto] gap-3 items-center">
             <CampoBusca
@@ -413,21 +485,29 @@ function CartaoResumo({
   icone,
   legenda,
   destaque = false,
+  tom = 'erro',
 }: {
   rotulo: string
   valor: number
   icone: ReactNode
   legenda?: string
   destaque?: boolean
+  /** Cor do destaque: vermelho para falha, amarelo para atenção. */
+  tom?: 'erro' | 'atencao'
 }) {
+  const cor = tom === 'atencao' ? 'amber' : 'red'
   return (
     <div className="group relative overflow-hidden rounded-xl border border-slate-200/80 bg-surface p-5 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover">
-      {destaque && <span className="absolute inset-x-0 top-0 h-[3px] bg-red-500" />}
+      {destaque && <span className={`absolute inset-x-0 top-0 h-[3px] ${tom === 'atencao' ? 'bg-amber-500' : 'bg-red-500'}`} />}
       <div className="flex items-start justify-between gap-3">
         <p className="text-[13px] font-medium text-slate-500">{rotulo}</p>
         <span
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-200 group-hover:scale-110 ${
-            destaque ? 'bg-red-50 text-red-600 ring-red-600/10' : 'bg-brand-50 text-brand-600 ring-brand-600/10'
+            destaque
+              ? cor === 'amber'
+                ? 'bg-amber-50 text-amber-600 ring-amber-600/10'
+                : 'bg-red-50 text-red-600 ring-red-600/10'
+              : 'bg-brand-50 text-brand-600 ring-brand-600/10'
           }`}
         >
           <span className="h-[18px] w-[18px]">{icone}</span>
@@ -439,10 +519,12 @@ function CartaoResumo({
       {legenda && (
         <p
           className={`mt-3 flex items-center gap-1.5 text-xs font-medium ${
-            destaque ? 'text-red-600' : 'text-slate-500'
+            destaque ? (cor === 'amber' ? 'text-amber-600' : 'text-red-600') : 'text-slate-500'
           }`}
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${destaque ? 'bg-red-500' : 'bg-slate-300'}`} />
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${destaque ? (cor === 'amber' ? 'bg-amber-500' : 'bg-red-500') : 'bg-slate-300'}`}
+          />
           {legenda}
         </p>
       )}

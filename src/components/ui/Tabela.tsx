@@ -1,4 +1,11 @@
-import type { CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import { useRef, useState } from 'react'
+import type {
+  CSSProperties,
+  InputHTMLAttributes,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  SelectHTMLAttributes,
+} from 'react'
 import { IconeAtualizar, IconeLupa, IconeX } from './Icones'
 
 /*
@@ -219,7 +226,17 @@ export function BotaoLimpar({ onClick, disabled }: { onClick: () => void; disabl
   )
 }
 
-export function BotaoAtualizar({ onClick, carregando }: { onClick: () => void; carregando: boolean }) {
+export function BotaoAtualizar({
+  onClick,
+  carregando,
+  rotulo = 'Atualizar',
+  rotuloCarregando = 'Atualizando…',
+}: {
+  onClick: () => void
+  carregando: boolean
+  rotulo?: string
+  rotuloCarregando?: string
+}) {
   return (
     <button
       type="button"
@@ -230,23 +247,80 @@ export function BotaoAtualizar({ onClick, carregando }: { onClick: () => void; c
       <span className={`h-4 w-4 ${carregando ? 'animate-spin' : ''}`}>
         <IconeAtualizar />
       </span>
-      {carregando ? 'Atualizando…' : 'Atualizar'}
+      {carregando ? rotuloCarregando : rotulo}
     </button>
   )
 }
 
-/** Tabela com cabeçalho fixo e rolagem interna. */
+/** Pixels que o mouse precisa andar para o gesto contar como arrastar (e não como clique). */
+const LIMIAR_ARRASTE_PX = 4
+
+/**
+ * Rolar a tabela segurando e puxando com o mouse. Fica desligado nas tabelas com texto para copiar:
+ * arrastar ali selecionaria o texto em vez de rolar. Não interfere em botões, links e campos.
+ */
+function useRolagemPorArraste(ativo: boolean) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [arrastando, setArrastando] = useState(false)
+
+  function aoPressionar(e: ReactMouseEvent<HTMLDivElement>) {
+    const area = ref.current
+    if (!ativo || !area || e.button !== 0) return
+    if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
+
+    const inicio = { x: e.clientX, y: e.clientY, left: area.scrollLeft, top: area.scrollTop }
+    let moveu = false
+
+    function mover(ev: MouseEvent) {
+      const dx = ev.clientX - inicio.x
+      const dy = ev.clientY - inicio.y
+      if (!moveu && Math.hypot(dx, dy) < LIMIAR_ARRASTE_PX) return
+      if (!moveu) {
+        moveu = true
+        setArrastando(true)
+      }
+      area!.scrollLeft = inicio.left - dx
+      area!.scrollTop = inicio.top - dy
+    }
+
+    function soltar() {
+      window.removeEventListener('mousemove', mover)
+      window.removeEventListener('mouseup', soltar)
+      if (moveu) {
+        setArrastando(false)
+        // Engole o clique que o navegador dispara ao soltar, para o arraste não "clicar" na linha.
+        window.addEventListener('click', (ev) => ev.stopPropagation(), { capture: true, once: true })
+      }
+    }
+
+    window.addEventListener('mousemove', mover)
+    window.addEventListener('mouseup', soltar)
+  }
+
+  return { ref, arrastando, aoPressionar }
+}
+
+/** Tabela com cabeçalho fixo e rolagem interna. `arrastavel` deixa rolar puxando com o mouse. */
 export function Tabela({
   colunas,
   children,
   alturaMaxima = 'max-h-[75vh]',
+  arrastavel = false,
 }: {
   colunas: { rotulo: string; className?: string }[]
   children: ReactNode
   alturaMaxima?: string
+  arrastavel?: boolean
 }) {
+  const { ref, arrastando, aoPressionar } = useRolagemPorArraste(arrastavel)
   return (
-    <div className={`overflow-auto ${alturaMaxima}`}>
+    <div
+      ref={ref}
+      onMouseDown={aoPressionar}
+      className={`overflow-auto ${alturaMaxima} ${
+        arrastavel ? (arrastando ? 'cursor-grabbing select-none' : 'cursor-grab') : ''
+      }`}
+    >
       <table className="min-w-full text-sm">
         <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_theme(colors.slate.200)]">
           <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">

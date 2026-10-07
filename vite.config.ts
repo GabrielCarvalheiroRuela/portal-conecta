@@ -1,7 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Os proxies de /api, /acesso e /wf existem só em desenvolvimento, para não esbarrar em CORS.
+// Os proxies de /api, /acesso, /filas-integracao e /wf existem só em desenvolvimento, para não esbarrar em CORS.
 // Em produção quem faz esse papel são os locations do nginx.conf.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -24,6 +24,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/acesso/, '/webhook/portal-acesso'),
+        },
+        '/filas-integracao': {
+          target: n8n,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/filas-integracao/,'/webhook/filas-integracao'),
         },
         '/wf': {
           target: n8n,
