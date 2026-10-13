@@ -207,12 +207,17 @@ export async function apiBaixar(caminho: string, base?: string): Promise<{ blob:
   return { blob: await resposta.blob(), nomeArquivo: nome }
 }
 
-export function apiPost<T>(caminho: string, corpo: unknown): Promise<T> {
-  return requisitar<T>(caminho, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(corpo),
-  })
+/** `base` troca o prefixo do proxy (padrão `/api`, a API do Monint), como no apiGet. */
+export function apiPost<T>(caminho: string, corpo: unknown, base?: string): Promise<T> {
+  return requisitar<T>(
+    caminho,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    },
+    base,
+  )
 }
 
 /**
