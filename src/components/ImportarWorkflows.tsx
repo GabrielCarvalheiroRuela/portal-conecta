@@ -110,7 +110,9 @@ export function ImportarWorkflows() {
           setErroInstancias(
             e instanceof ApiError && (e.status === 403 || e.status === 404)
               ? 'A importação não está liberada para o seu usuário, ou o workflow Portal_WF_Importar ainda não foi publicado no n8n.'
-              : mensagemDe(e, 'Não foi possível consultar as instâncias liberadas para importação.'),
+              : e instanceof ApiError && e.status >= 500
+                ? `O n8n respondeu com erro (${e.status}) ao consultar as instâncias. Confira se o workflow Portal_WF_Importar está publicado e veja a última execução dele no n8n.`
+                : mensagemDe(e, 'Não foi possível consultar as instâncias liberadas para importação.'),
           )
         }
       })

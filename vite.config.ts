@@ -38,6 +38,12 @@ export default defineConfig(({ mode }) => {
           target: n8n,
           changeOrigin: true,
           secure: true,
+          // O navegador manda Origin em todo POST, e o n8n de produção responde 500 (em vez de 404/401) a POST com
+          // Origin quando o webhook não está registrado para o método. A chamada é do mesmo site, então o n8n não
+          // precisa do Origin (ele só serve para CORS): o proxy não o repassa, como o nginx.
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq) => proxyReq.removeHeader('origin'))
+          },
           rewrite: (p) => p.replace(/^\/wf-importar/, '/webhook/portal-wf-importar'),
         },
         '/wf': {

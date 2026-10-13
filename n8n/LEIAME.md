@@ -75,4 +75,9 @@ JSON antes de enviar. Erros do pedido inteiro voltam como `{ error }` (400, 401 
 - **Um workflow volta com `HTTP 400 - request.body… additional property`:** a API do n8n recusou uma propriedade;
   a mensagem diz qual. Avise para ajustar a limpeza em `src/importacao/workflow.ts`.
 - **`HTTP 403` / `Forbidden` ao criar:** a chave não tem o escopo ou o usuário dela não escreve naquele projeto.
+- **A tela mostra "A API respondeu 500" (ou "O n8n respondeu com erro (500)") ao abrir a aba:** o n8n de produção
+  responde 500 a um POST com o cabeçalho `Origin` quando o webhook não está registrado para o método (sem o
+  `Origin`, ele responde 404). O navegador manda `Origin` em todo POST, e o resto do portal só usa GET, por isso
+  nunca apareceu. O nginx e o proxy do Vite **não repassam o `Origin`** nesta rota; se ainda assim aparecer,
+  confira se o `nginx.conf` novo foi publicado e se o workflow `Portal_WF_Importar` está **publicado**.
 - **`HTTP 413` do portal:** um único workflow passou de 20 MB (limite do nginx) ou o nginx não foi atualizado.
