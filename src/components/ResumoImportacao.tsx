@@ -152,6 +152,10 @@ export function ResumoImportacao({
       ))}
 
       {bloqueio && <p className="text-[13px] text-slate-500">{bloqueio}</p>}
+      <p className="text-[13px] text-slate-500">
+        Vai para <strong className="font-semibold text-slate-700">{instanciaNome || 'a instância escolhida'}</strong>, em{' '}
+        <strong className="font-semibold text-slate-700">{destinoTexto || 'raiz do projeto'}</strong>.
+      </p>
       <Botao type="button" disabled={Boolean(bloqueio) || criar === 0} onClick={() => setConfirmando(true)}>
         {criar === 0 ? 'Importar' : `Importar ${plural(criar, 'workflow', 'workflows')}`}
       </Botao>

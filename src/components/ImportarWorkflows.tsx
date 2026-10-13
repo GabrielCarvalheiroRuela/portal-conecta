@@ -10,7 +10,9 @@ import { ResumoImportacao } from './ResumoImportacao'
 import { SeletorDestino, caminhoDaPastaDestino } from './SeletorDestino'
 import { Alerta } from './ui/Alerta'
 import { Botao } from './ui/Botao'
+import { CaixaSelecao } from './ui/CaixaSelecao'
 import { Campo } from './ui/Campo'
+import { IconeSetaDireita } from './ui/Icones'
 import { Select } from './ui/Select'
 
 const CLASSE_ACAO_TEXTO =
@@ -32,22 +34,52 @@ function Painel({ titulo, acao, children, className = '' }: { titulo: string; ac
   )
 }
 
-/** A caixa de seleção com um texto de ajuda por baixo. */
+/**
+ * Explicação que fica escondida atrás de uma setinha: abre e fecha ao clicar. Com `rotulo` mostra a setinha com o
+ * texto ao lado (para pôr sob um campo); sem ele, só a setinha (para pôr ao lado de um título).
+ */
+function Explicacao({ id, texto, rotulo }: { id: string; texto: string; rotulo?: string }) {
+  const [aberta, setAberta] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        aria-expanded={aberta}
+        aria-controls={id}
+        aria-label={rotulo ? undefined : aberta ? 'Esconder a explicação' : 'Mostrar a explicação'}
+        title={rotulo ? undefined : aberta ? 'Esconder a explicação' : 'Mostrar a explicação'}
+        onClick={() => setAberta((v) => !v)}
+        className="inline-flex items-center gap-1 rounded text-[12px] text-slate-500 transition-colors hover:text-slate-800 focus-visible:ring-2 focus-visible:ring-brand-500"
+      >
+        <span className={`h-3.5 w-3.5 transition-transform duration-150 ${aberta ? 'rotate-90' : ''}`}>
+          <IconeSetaDireita />
+        </span>
+        {rotulo}
+      </button>
+      {aberta && (
+        <span id={id} className="mt-1 block w-full text-[12px] leading-snug text-slate-500">
+          {texto}
+        </span>
+      )}
+    </>
+  )
+}
+
+/** A caixa de seleção com uma explicação escondida atrás de uma setinha. */
 function Opcao({ id, marcado, aoMudar, desabilitado, titulo, ajuda }: { id: string; marcado: boolean; aoMudar: (v: boolean) => void; desabilitado: boolean; titulo: string; ajuda: string }) {
   return (
     <div className="flex items-start gap-2">
-      <input
-        id={id}
-        type="checkbox"
-        checked={marcado}
-        disabled={desabilitado}
-        onChange={(e) => aoMudar(e.target.checked)}
-        className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-      />
-      <label htmlFor={id} className="text-sm text-slate-700">
-        {titulo}
-        <span className="block text-[12px] text-slate-500">{ajuda}</span>
-      </label>
+      <span className="mt-0.5 inline-flex">
+        <CaixaSelecao id={id} estado={marcado ? 'todos' : 'nenhum'} desabilitado={desabilitado} aoClicar={() => aoMudar(!marcado)} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <label htmlFor={id} className="text-sm text-slate-700">
+            {titulo}
+          </label>
+          <Explicacao id={`${id}-explicacao`} texto={ajuda} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -77,6 +109,8 @@ export function ImportarWorkflows() {
   const [lendo, setLendo] = useState(false)
   const [erroOrigem, setErroOrigem] = useState<string | null>(null)
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set())
+  // O que a pessoa tirou da importação com o X: some da lista e não entra em nenhuma contagem.
+  const [removidos, setRemovidos] = useState<Set<string>>(new Set())
   const [busca, setBusca] = useState('')
 
   // onde guardar e como
@@ -244,10 +278,16 @@ export function ImportarWorkflows() {
     })
   }
 
+  function removerDaImportacao(itens: WorkflowOrigem[]) {
+    setRemovidos((atual) => new Set([...atual, ...itens.map((i) => i.chave)]))
+    alterarSelecao(itens, false)
+  }
+
   function limparOrigem() {
     setArquivos([])
     setOrigem(null)
     setSelecionados(new Set())
+    setRemovidos(new Set())
     setBusca('')
     setErroOrigem(null)
     setResultado(null)
@@ -257,7 +297,8 @@ export function ImportarWorkflows() {
     () => ({ destinoId, subpasta, caminhoCompleto, conflito, remapearReferencias: remapear }),
     [destinoId, subpasta, caminhoCompleto, conflito, remapear],
   )
-  const selecionadosLista = useMemo(() => (origem ? origem.workflows.filter((w) => selecionados.has(w.chave)) : []), [origem, selecionados])
+  const disponiveis = useMemo(() => (origem ? origem.workflows.filter((w) => !removidos.has(w.chave)) : []), [origem, removidos])
+  const selecionadosLista = useMemo(() => disponiveis.filter((w) => selecionados.has(w.chave)), [disponiveis, selecionados])
 
   const plano = useMemo(
     () =>
@@ -266,7 +307,24 @@ export function ImportarWorkflows() {
         : null,
     [origem, destinoDados, selecionadosLista, opcoes],
   )
-  const situacao = useMemo(() => new Map((plano?.itens ?? []).map((i) => [i.chave, i])), [plano])
+  // Quem já existe no destino aparece como "Já existe" mesmo sem estar marcado: olha todos os workflows da lista.
+  const existentesDaLista = useMemo(
+    () =>
+      origem && destinoDados
+        ? montarPlano({
+            selecionados: disponiveis,
+            todos: origem.workflows,
+            opcoes: { ...opcoes, conflito: 'pular' },
+            destino: destinoDados.existentes,
+            somenteSituacao: true,
+          }).itens.filter((i) => i.acao === 'pular' && i.idExistente)
+        : [],
+    [origem, destinoDados, disponiveis, opcoes],
+  )
+  const situacao = useMemo(
+    () => new Map([...existentesDaLista, ...(plano?.itens ?? [])].map((i) => [i.chave, i])),
+    [existentesDaLista, plano],
+  )
 
   const instanciaNome = instancias.find((i) => i.id === instancia)?.nome ?? instancia
   const pastasDestino = destinoDados?.mapa.pastas ?? []
@@ -347,7 +405,6 @@ export function ImportarWorkflows() {
             value={instancia}
             disabled={carregandoInstancias || travado || instancias.length === 0}
             onChange={(e) => setInstancia(e.target.value)}
-            ajuda="Só aparecem as instâncias liberadas para importação."
           >
             <option value="">{carregandoInstancias ? 'Carregando…' : 'Selecione'}</option>
             {instancias.map((i) => (
@@ -369,12 +426,12 @@ export function ImportarWorkflows() {
         <div className="grid gap-4 xl:grid-cols-2">
           {/* ------------------------------------------------------------ origem */}
           <Painel
-            titulo="1. O que importar"
+            titulo="O que importar"
             className="h-[42rem]"
             acao={
               origem ? (
                 <div className="flex items-center gap-3">
-                  <button type="button" className={CLASSE_ACAO_TEXTO} disabled={travado} onClick={() => alterarSelecao(origem.workflows, true)}>
+                  <button type="button" className={CLASSE_ACAO_TEXTO} disabled={travado} onClick={() => alterarSelecao(disponiveis, true)}>
                     Selecionar tudo
                   </button>
                   <button type="button" className={CLASSE_ACAO_TEXTO} disabled={travado || selecionados.size === 0} onClick={() => setSelecionados(new Set())}>
@@ -455,10 +512,15 @@ export function ImportarWorkflows() {
                 <>
                   <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 px-4 py-2 text-[13px] text-slate-500">
                     <span>
-                      <strong className="font-semibold text-slate-700">{origem.workflows.length}</strong> workflow{origem.workflows.length === 1 ? '' : 's'}
+                      <strong className="font-semibold text-slate-700">{disponiveis.length}</strong> workflow{disponiveis.length === 1 ? '' : 's'}
                       {' · '}
                       <strong className="font-semibold text-slate-700">{selecionados.size}</strong> marcado{selecionados.size === 1 ? '' : 's'}
                     </span>
+                    {removidos.size > 0 && (
+                      <button type="button" className={CLASSE_ACAO_TEXTO} disabled={travado} onClick={() => setRemovidos(new Set())}>
+                        {removidos.size} removido{removidos.size === 1 ? '' : 's'} · restaurar
+                      </button>
+                    )}
                     {origem.ignorados.length > 0 && (
                       <details className="relative">
                         <summary className="cursor-pointer select-none text-amber-700">{origem.ignorados.length} arquivo(s) ignorado(s)</summary>
@@ -483,7 +545,16 @@ export function ImportarWorkflows() {
                       />
                     </div>
                   </div>
-                  <ArvoreOrigem raiz={origem.raiz} selecionados={selecionados} situacao={situacao} busca={busca} desabilitado={travado} aoAlterar={alterarSelecao} />
+                  <ArvoreOrigem
+                    raiz={origem.raiz}
+                    selecionados={selecionados}
+                    removidos={removidos}
+                    situacao={situacao}
+                    busca={busca}
+                    desabilitado={travado}
+                    aoAlterar={alterarSelecao}
+                    aoRemover={removerDaImportacao}
+                  />
                 </>
               )}
             </div>
@@ -491,7 +562,7 @@ export function ImportarWorkflows() {
 
           {/* ------------------------------------------------------------ destino, opções e resumo */}
           <div className="flex min-w-0 flex-col gap-4">
-            <Painel titulo="2. Onde guardar">
+            <Painel titulo="Onde guardar">
               <div className="space-y-3 p-4">
                 {!instancia ? (
                   <p className="text-sm text-slate-400">Escolha a instância de destino.</p>
@@ -499,9 +570,13 @@ export function ImportarWorkflows() {
                   <p className="text-sm text-slate-400">Carregando as pastas da instância…</p>
                 ) : destinoDados ? (
                   <>
-                    <p className="text-[13px] text-slate-500">
-                      Escolha a pasta que vai receber tudo. Dentro dela, as pastas do arquivo são recriadas do jeito que estão.
-                    </p>
+                    <div>
+                      <Explicacao
+                        id="importar-destino-explicacao"
+                        rotulo="Como funciona"
+                        texto="Escolha a pasta que vai receber tudo. Dentro dela, as pastas do arquivo são recriadas do jeito que estão."
+                      />
+                    </div>
                     <SeletorDestino pastas={pastasDestino} valor={destinoId} desabilitado={travado} aoEscolher={setDestinoId} />
                     <Campo
                       id="importar-subpasta"
@@ -511,8 +586,14 @@ export function ImportarWorkflows() {
                       disabled={travado}
                       maxLength={128}
                       onChange={(e) => setSubpasta(e.target.value)}
-                      ajuda="Cria uma pasta com este nome dentro do destino e guarda tudo nela."
                     />
+                    <div className="-mt-1.5">
+                      <Explicacao
+                        id="importar-subpasta-explicacao"
+                        rotulo="Explicação"
+                        texto="Cria uma pasta com este nome dentro do destino e guarda tudo nela."
+                      />
+                    </div>
                     <p className="text-[13px] text-slate-500">
                       Destino: <strong className="text-slate-700">{destinoTexto || 'raiz do projeto'}</strong>
                     </p>
@@ -521,7 +602,7 @@ export function ImportarWorkflows() {
               </div>
             </Painel>
 
-            <Painel titulo="3. Opções">
+            <Painel titulo="Opções">
               <div className="space-y-3 p-4">
                 <Opcao
                   id="importar-caminho"
@@ -545,15 +626,17 @@ export function ImportarWorkflows() {
                   value={conflito}
                   disabled={travado}
                   onChange={(e) => setConflito(e.target.value as PoliticaConflito)}
-                  ajuda="Nada é sobrescrito: o que já existe nunca é alterado."
                 >
                   <option value="pular">Pular (não importar esse)</option>
                   <option value="renomear">Importar com outro nome ("… (importado)")</option>
                 </Select>
+                <div className="-mt-1.5">
+                  <Explicacao id="importar-conflito-explicacao" rotulo="Explicação" texto="Nada é sobrescrito: o que já existe nunca é alterado." />
+                </div>
               </div>
             </Painel>
 
-            <Painel titulo="4. Conferir e importar">
+            <Painel titulo="Conferir e importar">
               <div className="p-4">
                 {plano ? (
                   <ResumoImportacao

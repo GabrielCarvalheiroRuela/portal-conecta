@@ -105,6 +105,8 @@ export function montarPlano(args: {
   todos: WorkflowOrigem[]
   opcoes: OpcoesImportacao
   destino: ExistentesNoDestino
+  /** Só situa cada workflow (criar ou já existe): pula a análise de chamadas e credenciais, que é a parte cara. */
+  somenteSituacao?: boolean
 }): Plano {
   const { selecionados, todos, opcoes, destino } = args
 
@@ -206,6 +208,17 @@ export function montarPlano(args: {
       ocupados.add(minusculo(item.nomeFinal))
     }
     itens.push(item)
+  }
+
+  if (args.somenteSituacao) {
+    const novos = itens.filter((i) => i.acao === 'criar')
+    return {
+      itens,
+      pastas,
+      pastasExistentes: existentes,
+      avisos: [],
+      resumo: { criar: novos.length, pular: itens.length - novos.length, bytes: novos.reduce((soma, i) => soma + i.bytes, 0) },
+    }
   }
 
   // 4) avisos sobre chamadas entre workflows e credenciais
