@@ -52,7 +52,11 @@ const INSTANCIAS = [
   { id: 'automaker_prod', nome: 'Produção (simulado)', rotulos: CATEGORIA_PLATAFORMA },
   { id: 'automaker_1', nome: 'Automaker 1 (simulado)', rotulos: CLIENTE_BASE },
   { id: 'automakerdev_cr', nome: 'AutomakerDev CR (simulado)', rotulos: CLIENTE_BASE },
+  { id: 'automakerdev_geral', nome: 'Automaker Dev Geral (simulado)', rotulos: CLIENTE_BASE },
 ]
+
+/** Instâncias que aceitam importação no simulador (no n8n de verdade é a lista do Portal_WF_Importar). */
+const IMPORTA_EM = ['automakerdev_geral']
 
 const WORKFLOWS: Record<string, Wf[]> = {
   automaker_prod: [
@@ -82,6 +86,10 @@ const WORKFLOWS: Record<string, Wf[]> = {
     { id: 'a07', pasta: 'A3', name: 'LAB_Mercos_Titulos', tags: ['mercos'] },
     { id: 'a08', name: 'Paraiso_Shopify_PedidoProcessa' },
   ],
+  automakerdev_geral: [
+    { id: 'g01', pasta: 'G4', name: 'Paulinho_Mercos_Pedido_Captura' },
+    { id: 'g02', name: 'Solto_Existente' },
+  ],
   automakerdev_cr: [
     { id: 'd01', name: 'LAB_Mercos_Cliente_Subida' },
     { id: 'd02', name: 'LAB_Mercos_Pedido_Captura', chama: ['LAB_Mercos_Credenciais'] },
@@ -107,6 +115,13 @@ const PASTAS: Record<string, Pasta[]> = {
     { id: 'A2', nome: '(MIGRADO MT) TMS Cores', pai: 'A1' },
     { id: 'A3', nome: 'Mercos', pai: 'A1' },
     { id: 'A4', nome: 'Tray', pai: null },
+  ],
+  automakerdev_geral: [
+    { id: 'G1', nome: 'SCHUTZ', pai: null },
+    { id: 'G2', nome: 'CLIMBA', pai: 'G1' },
+    { id: 'G3', nome: 'Mercos', pai: 'G1' },
+    { id: 'G4', nome: 'Paulinho Motos', pai: 'G3' },
+    { id: 'G5', nome: 'Gabriel Carvalheiro', pai: null },
   ],
   automakerdev_cr: [],
 }
@@ -210,7 +225,7 @@ function tratar(req: IncomingMessage, res: ServerResponse): boolean {
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (url.pathname === '/acesso') {
-    json(res, 200, { email: 'dev@simulado', recursos: ['workflows'] })
+    json(res, 200, { email: 'dev@simulado', recursos: ['workflows', 'workflows-importar'] })
     return true
   }
   if (url.pathname !== '/wf') {
@@ -254,6 +269,117 @@ function tratar(req: IncomingMessage, res: ServerResponse): boolean {
   return true
 }
 
+// ---------------------------------------------------------------------------------------------
+// Importação (webhook portal-wf-importar). Repete as regras estritas da API pública do n8n: propriedade
+// desconhecida no corpo, em settings ou num node faz a criação falhar, como no n8n de verdade.
+// Um nome com "FALHAR" é recusado, para dar para ver a tela tratando erro.
+// ---------------------------------------------------------------------------------------------
+const TOPO = new Set(['name', 'nodes', 'connections', 'settings', 'description', 'pinData', 'staticData', 'nodeGroups', 'projectId', 'parentFolderId', 'shared'])
+const NODE = new Set(['id', 'name', 'webhookId', 'disabled', 'notesInFlow', 'notes', 'type', 'typeVersion', 'executeOnce', 'alwaysOutputData', 'retryOnFail', 'maxTries', 'waitBetweenTries', 'continueOnFail', 'onError', 'position', 'parameters', 'credentials', 'customTelemetryTags', 'extendsCredential'])
+const SETTINGS = new Set(['saveExecutionProgress', 'saveManualExecutions', 'saveDataErrorExecution', 'saveDataSuccessExecution', 'executionTimeout', 'errorWorkflow', 'timezone', 'executionOrder', 'binaryMode', 'callerPolicy', 'callerIds', 'timeSavedMode', 'timeSavedPerExecution', 'redactionPolicy', 'availableInMCP', 'customTelemetryTags', 'credentialResolverId'])
+
+function validarWorkflow(w: Record<string, unknown>): string | null {
+  for (const k of Object.keys(w)) if (!TOPO.has(k)) return `request.body is not allowed to have the additional property "${k}"`
+  for (const k of ['name', 'nodes', 'connections', 'settings']) if (!(k in w)) return `request.body requires property "${k}"`
+  for (const k of Object.keys((w.settings as object) ?? {})) if (!SETTINGS.has(k)) return `request.body.settings is not allowed to have the additional property "${k}"`
+  for (const n of (w.nodes as Record<string, unknown>[]) ?? []) {
+    for (const k of Object.keys(n)) if (!NODE.has(k)) return `request.body.nodes[] is not allowed to have the additional property "${k}"`
+  }
+  return null
+}
+
+let sequencia = 0
+const novoId = (prefixo: string) => `${prefixo}${String(++sequencia).padStart(4, '0')}`
+
+function lerCorpo(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const partes: Buffer[] = []
+    req.on('data', (p: Buffer) => partes.push(p))
+    req.on('end', () => resolve(Buffer.concat(partes).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+interface ItemImportacao {
+  chave: string
+  nome?: string
+  paiId?: string | null
+  pastaId?: string | null
+  id?: string
+  workflow?: Record<string, unknown>
+}
+
+async function tratarImportar(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  if (url.pathname !== '/wf-importar') {
+    return false
+  }
+  if (req.method !== 'POST') {
+    json(res, 405, { error: 'Use POST' })
+    return true
+  }
+  let corpo: { acao?: string; instancia?: string; itens?: ItemImportacao[] }
+  try {
+    corpo = JSON.parse(await lerCorpo(req))
+  } catch {
+    json(res, 400, { error: 'JSON inválido' })
+    return true
+  }
+  const acao = minus(corpo.acao)
+  if (acao === 'instancias') {
+    json(res, 200, { instancias: INSTANCIAS.filter((i) => IMPORTA_EM.includes(i.id)).map((i) => ({ id: i.id, nome: i.nome })) })
+    return true
+  }
+  const instancia = minus(corpo.instancia)
+  if (!IMPORTA_EM.includes(instancia)) {
+    json(res, 403, { error: 'A importação não está liberada para esta instância.' })
+    return true
+  }
+  const itens = Array.isArray(corpo.itens) ? corpo.itens : []
+  if (itens.length === 0 || itens.length > 25) {
+    json(res, 400, { error: 'Envie de 1 a 25 itens por pedido.' })
+    return true
+  }
+  const pastas = PASTAS[instancia]
+  const workflows = WORKFLOWS[instancia]
+  await new Promise((r) => setTimeout(r, 350)) // dá para ver o andamento na tela
+
+  if (acao === 'criar-pastas') {
+    const resultados = itens.map((i) => {
+      if (!i.nome || i.nome.length > 128) return { chave: i.chave, erro: 'Nome de pasta inválido (1 a 128 caracteres).' }
+      if (i.nome.includes('FALHAR')) return { chave: i.chave, erro: 'Simulado: o n8n recusou esta pasta.' }
+      if (i.paiId && !pastas.some((p) => p.id === i.paiId)) return { chave: i.chave, erro: `Pasta-mãe "${i.paiId}" não existe.` }
+      const nova = { id: novoId('MF'), nome: i.nome, pai: i.paiId ?? null }
+      pastas.push(nova)
+      return { chave: i.chave, id: nova.id }
+    })
+    json(res, 200, { resultados })
+  } else if (acao === 'criar-workflows') {
+    const resultados = itens.map((i) => {
+      const w = i.workflow ?? {}
+      const problema = validarWorkflow(w)
+      if (problema) return { chave: i.chave, erro: `400 - ${problema}` }
+      if (String(w.name).includes('FALHAR')) return { chave: i.chave, erro: 'Simulado: o n8n recusou este workflow.' }
+      if (i.pastaId && !pastas.some((p) => p.id === i.pastaId)) return { chave: i.chave, erro: `Pasta "${i.pastaId}" não existe.` }
+      const novo: Wf = { id: novoId('MW'), name: String(w.name), pasta: i.pastaId ?? undefined }
+      workflows.push(novo)
+      return { chave: i.chave, id: novo.id }
+    })
+    json(res, 200, { resultados })
+  } else if (acao === 'atualizar-workflows') {
+    const resultados = itens.map((i) => {
+      const alvo = workflows.find((w) => w.id === i.id)
+      if (!alvo) return { chave: i.chave, erro: '404 - workflow não encontrado' }
+      const problema = validarWorkflow(i.workflow ?? {})
+      return problema ? { chave: i.chave, erro: `400 - ${problema}` } : { chave: i.chave, id: alvo.id }
+    })
+    json(res, 200, { resultados })
+  } else {
+    json(res, 400, { error: 'Ação inválida' })
+  }
+  return true
+}
+
 export function mockWorkflows(ligado: boolean): Plugin {
   return {
     name: 'mock-workflows',
@@ -264,9 +390,14 @@ export function mockWorkflows(ligado: boolean): Plugin {
       }
       // Sem devolver função: roda antes do proxy do Vite, então /wf e /acesso não saem da máquina.
       server.middlewares.use((req, res, next) => {
-        if (!tratar(req, res)) {
-          next()
+        if (tratar(req, res)) {
+          return
         }
+        tratarImportar(req, res).then((tratada) => {
+          if (!tratada) {
+            next()
+          }
+        })
       })
     },
   }

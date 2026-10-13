@@ -33,6 +33,13 @@ export default defineConfig(({ mode }) => {
           secure: true,
           rewrite: (p) => p.replace(/^\/filas-integracao/,'/webhook/filas-integracao'),
         },
+        // /wf-importar vem antes de /wf: o Vite casa pelo começo do caminho, e "/wf" também casaria com ele.
+        '/wf-importar': {
+          target: n8n,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/wf-importar/, '/webhook/portal-wf-importar'),
+        },
         '/wf': {
           target: n8n,
           changeOrigin: true,

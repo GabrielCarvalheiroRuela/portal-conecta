@@ -7,7 +7,7 @@ import { Monitoramento } from './components/Monitoramento'
 import { ErroNaTela } from './components/ui/ErroNaTela'
 import { PainelSucesso } from './components/PainelSucesso'
 import { TelaLogin } from './components/TelaLogin'
-import { ExportarWorkflows } from './components/ExportarWorkflows'
+import { PaginaWorkflows } from './components/PaginaWorkflows'
 import { ehAdmin, registrarExpiracao, sair, temSessao, usuarioDaSessao } from './services/api'
 import { carregarRecursos, type Recurso } from './services/acesso'
 import type { IntegracaoCriada } from './types/integracao'
@@ -266,7 +266,7 @@ export default function App() {
 
               {admin && aba === 'workflows' && recursos.includes('workflows') && (
                 <div className="animate-fade-in">
-                  <ExportarWorkflows />
+                  <PaginaWorkflows podeImportar={recursos.includes('workflows-importar')} />
                 </div>
               )}
             </div>

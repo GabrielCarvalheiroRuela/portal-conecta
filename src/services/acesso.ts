@@ -10,7 +10,7 @@ import { apiGet } from './api'
  */
 
 /** Recursos que dependem de permissão. Os demais (monitoramento, integrações...) são livres. */
-export type Recurso = 'workflows'
+export type Recurso = 'workflows' | 'workflows-importar'
 
 const BASE_ACESSO = '/acesso'
 
