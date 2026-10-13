@@ -144,6 +144,43 @@ credencial de cada uma fica só no n8n. Workflows arquivados não entram. Os JSO
 texto puro nos nodes, por isso cada exportação é registrada na tabela `portal_wf_log` com o e-mail,
 a instância, a quantidade e os nomes exportados.
 
+### Aba Workflows (importação)
+
+Leva workflows de um ZIP (as partes de uma exportação juntas), de arquivos `.json` ou de uma pasta do
+computador para uma instância do n8n, **mantendo a hierarquia de pastas do arquivo**. Aparece como a aba
+**Importar** dentro de Workflows, só para quem tem o recurso `workflows-importar`.
+
+1. **O que importar:** abra os arquivos; a árvore mostra as pastas como estavam. Marque workflows ou pastas
+   inteiras (a pasta marca tudo o que há dentro).
+2. **Onde guardar:** escolha a instância (só as liberadas) e a pasta que recebe tudo, ou a raiz do projeto.
+   Dentro dela as pastas do arquivo são recriadas; as que já existem (mesmo nome, sem diferenciar
+   maiúsculas) são reaproveitadas. Dá para criar uma pasta nova só para a importação.
+3. **Opções:** manter o caminho completo ou tirar as pastas que todos os marcados têm em comum; o que fazer
+   com um workflow de mesmo nome na mesma pasta (**pular** ou criar com outro nome — nada é sobrescrito);
+   e ligar os workflows entre si.
+4. **Conferir e importar:** o plano diz quantos workflows e pastas serão criados e quantos pulados, e avisa
+   das chamadas que ficarão quebradas e das credenciais. Só depois de confirmar o portal escreve na instância.
+
+Como funciona por baixo (código em `src/importacao/`, sem dependências novas):
+
+- O ZIP é lido no navegador (`zipLeitor.ts`); nada do arquivo sobe antes de você confirmar.
+- Cada workflow é limpo para a API pública do n8n, que **recusa propriedade desconhecida** (`workflow.ts`):
+  sem `id`, `active`, `tags`, `versionId` etc. e com `settings` só com o que ela aceita.
+- A importação roda em três etapas e em pedidos pequenos (`executor.ts`): pastas, nível a nível; workflows,
+  em lotes de até 5; e, como o n8n dá **IDs novos**, os workflows que chamam outros (Execute Workflow, tool
+  de workflow, `errorWorkflow`, `callerIds`) são reescritos com os IDs novos.
+- Os workflows entram **inativos**, as credenciais continuam apontando para os IDs da origem (é preciso
+  escolhê-las nos nodes) e as tags não vão.
+- Quem escreve é o webhook `portal-wf-importar` (workflow **Portal_WF_Importar**, `/wf-importar` no nginx e
+  no Vite), com ADMIN, lista de instâncias liberadas e uma credencial de **escrita** que só existe no n8n.
+  Cada importação fica em `portal_wf_log`. Instalação e configuração: [`n8n/LEIAME.md`](n8n/LEIAME.md).
+
+Se algo falhar no meio, o que foi criado fica; importar a mesma seleção de novo com "pular" continua de onde
+parou. Em desenvolvimento, `VITE_MOCK_WF=1` simula o webhook (a instância "Automaker Dev Geral (simulado)").
+
+`npm run test:importacao` roda 118 conferências, sem navegador e sem n8n: leitor de ZIP, plano, executor e o
+código real dos nodes de `n8n/Portal_WF_Importar.json` contra uma API do n8n simulada com o esquema estrito.
+
 ## Build e publicação
 
 ```bash
