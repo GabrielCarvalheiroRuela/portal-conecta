@@ -8,6 +8,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const target = env.VITE_API_TARGET || 'http://localhost:3001'
   const n8n = env.VITE_N8N_TARGET || 'https://automakerdev.citelsoftware.com.br'
+  // Onde está o workflow Portal_WF_Importar. Por padrão é o mesmo n8n dos outros; para testar a importação sem
+  // mexer na produção, aponte para a instância de desenvolvimento onde o workflow foi publicado.
+  const n8nImportar = env.VITE_N8N_IMPORTAR_TARGET || n8n
 
   return {
     // VITE_MOCK_WF=1 simula /acesso e /wf (aba Workflows) sem n8n; ver vite-mock-wf.ts.
@@ -35,7 +38,7 @@ export default defineConfig(({ mode }) => {
         },
         // /wf-importar vem antes de /wf: o Vite casa pelo começo do caminho, e "/wf" também casaria com ele.
         '/wf-importar': {
-          target: n8n,
+          target: n8nImportar,
           changeOrigin: true,
           secure: true,
           // O navegador manda Origin em todo POST, e o n8n de produção responde 500 (em vez de 404/401) a POST com
