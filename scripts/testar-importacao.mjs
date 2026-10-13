@@ -290,7 +290,11 @@ async function parte3() {
   const webhook = wfN8n.nodes.find((n) => n.type.endsWith('.webhook'))
   confere(webhook.parameters.path === 'portal-wf-importar' && webhook.parameters.httpMethod === 'POST', 'webhook POST em portal-wf-importar')
   confere(wfN8n.active === false && !('id' in wfN8n), 'entregue inativo e sem ID (importa como workflow novo)')
-  confere(wfN8n.nodes.filter((n) => n.type.endsWith('.httpRequest') && n.credentials).every((n) => n.credentials.n8nApi.id === 'TROCAR_APOS_IMPORTAR'), 'nenhuma credencial real dentro do arquivo')
+  const nodesHttp = wfN8n.nodes.filter((n) => n.type.endsWith('.httpRequest') && n.credentials)
+  confere(nodesHttp.every((n) => n.credentials.n8nApi.id === 'TROCAR_APOS_IMPORTAR'), 'nenhuma credencial real dentro do arquivo')
+  confere(nodesHttp.length === 9 && ['Criar Pasta', 'Criar Workflow', 'Atualizar Workflow'].every((p) => ['automaker_prod', 'automaker_1', 'automakerdev_geral'].every((i) => nodesHttp.some((n) => n.name === `${p} (${i})`))), '3 nodes de escrita para cada uma das 3 instancias')
+  const seletores = wfN8n.nodes.filter((n) => n.name.startsWith('Qual Instancia?'))
+  confere(seletores.length === 3 && seletores.every((n) => wfN8n.connections[n.name].main.length === 4 && wfN8n.connections[n.name].main[3][0].node === 'Responder 403'), 'cada seletor de instancia tem 3 saidas e a "outra" vai para 403')
 
   // API do n8n simulada
   const criarApi = () => {
@@ -329,7 +333,8 @@ async function parte3() {
     if (perfil === null) return { status: 401 }
     let checar = C.checar
     if (config.emailsPermitidos) checar = checar.replace('const EMAILS_PERMITIDOS = [];', 'const EMAILS_PERMITIDOS = ' + JSON.stringify(config.emailsPermitidos) + ';')
-    checar = checar.replace(/projetoId: '[^']+'/, "projetoId: 'PROJ_OK'") // o ID de verdade fica so no arquivo
+    // o ID de verdade fica so no arquivo; `semProjetos` mantem como esta, para ver o que acontece com os ainda por preencher
+    if (!config.semProjetos) checar = checar.replace(/projetoId: '[^']+'/g, "projetoId: 'PROJ_OK'")
     await rodar('Checar Permissao', checar, saidas['Ler Credencial'])
     if (!saidas['Checar Permissao'][0].json.permitido) return { status: 403 }
     await rodar('Validar Pedido', C.validar, saidas['Checar Permissao'])
@@ -354,7 +359,13 @@ async function parte3() {
   secao('Workflow do n8n: autenticacao e acesso')
   let api = criarApi()
   let r = await n8n(api, { acao: 'instancias' })
-  confere(r.status === 200 && r.corpo.instancias.length === 1 && r.corpo.instancias[0].id === 'automakerdev_geral' && !('baseUrl' in r.corpo.instancias[0]), 'lista as instancias liberadas sem expor a URL')
+  const idsLista = r.corpo.instancias.map((i) => i.id)
+  confere(r.status === 200 && idsLista.join() === 'automaker_prod,automaker_1,automakerdev_geral' && r.corpo.instancias.every((i) => !('baseUrl' in i) && !('projetoId' in i)), 'lista as 3 instancias liberadas sem expor a URL nem o projeto')
+  r = await n8n(api, { acao: 'instancias' }, { config: { semProjetos: true } })
+  confere(r.status === 200 && r.corpo.instancias.length === 1 && r.corpo.instancias[0].id === 'automakerdev_geral', 'instancia com projetoId ainda por preencher (TROCAR_...) fica escondida')
+  const semProj = criarApi()
+  r = await n8n(semProj, { acao: 'criar-pastas', instancia: 'automaker_prod', itens: [{ chave: 'a', nome: 'x' }] }, { config: { semProjetos: true } })
+  confere(r.status === 403 && semProj.chamadas.length === 0, 'instancia sem projetoId nao recebe importacao (403, nenhuma chamada)')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: null })).status === 401, 'token invalido: 401')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: 'USUARIO' })).status === 403, 'usuario comum: 403')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: 'admin' })).status === 200, 'perfil em minusculas vale')
@@ -368,7 +379,7 @@ async function parte3() {
     confere(a.chamadas.length === 0, `${rotulo}: nenhuma chamada a API`)
   }
   await invalido({ acao: 'apagar-tudo', ...base, itens: [] }, 400, 'Ação inválida', 'acao desconhecida')
-  await invalido({ acao: 'criar-pastas', instancia: 'automaker_prod', itens: [{ chave: 'a', nome: 'x' }] }, 403, 'não está liberada', 'instancia fora da lista (producao)')
+  await invalido({ acao: 'criar-pastas', instancia: 'outra_instancia', itens: [{ chave: 'a', nome: 'x' }] }, 403, 'não está liberada', 'instancia fora da lista')
   await invalido({ acao: 'criar-pastas', instancia: '', itens: [{ chave: 'a', nome: 'x' }] }, 403, 'não está liberada', 'sem instancia')
   await invalido({ acao: 'criar-pastas', ...base, itens: [] }, 400, '1 a 25', 'sem itens')
   await invalido({ acao: 'criar-pastas', ...base, itens: Array.from({ length: 26 }, (_, i) => ({ chave: 'k' + i, nome: 'p' })) }, 400, '1 a 25', 'itens demais')

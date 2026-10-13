@@ -8,8 +8,10 @@ no n8n de produção; este arquivo existe aqui para ser revisado e instalado jun
 
 - Só aceita usuário **ADMIN** do Monint (o token vai a `/usuarios/me`, como no `Portal_WF_Exportar`). Dá para
   limitar a e-mails específicos em `EMAILS_PERMITIDOS`, no node **Checar Permissao**.
-- Só escreve nas instâncias listadas em `INSTANCIAS` (mesmo node). Hoje: **Automaker Dev Geral**. A
+- Só escreve nas instâncias listadas em `INSTANCIAS` (mesmo node). Hoje: **Produção**, **Automaker 1**
+  e **Automaker Dev Geral** (as mesmas do `Portal_WF_Exportar`, com os mesmos ids; a AutomakerDev CR não importa). A
   credencial de **escrita** de cada instância fica só nos 3 nodes HTTP dela e **nunca chega ao navegador**.
+  Instância cujo `projetoId` ainda está como `TROCAR_PELO_ID_DO_PROJETO` fica escondida e não recebe nada.
 - **Só cria**: pastas, workflows (inativos) e, para ligar as chamadas entre eles, atualiza os workflows que
   acabou de criar. Não sobrescreve nem apaga nada que já existia.
 - Valida cada pedido antes de tocar na API: 1 a 25 itens, nomes de 1 a 128 caracteres, IDs só com letras,
@@ -19,16 +21,18 @@ no n8n de produção; este arquivo existe aqui para ser revisado e instalado jun
 
 ## Instalação (uma vez)
 
-1. **Na instância de destino**, em *Settings → n8n API*, crie uma chave **de escrita** com o usuário dono do
-   projeto Personal que vai receber os workflows. Escopos: `workflow:create`, `workflow:update`,
+1. **Em cada instância de destino**, em *Settings → n8n API*, a chave precisa permitir **escrita** (do usuário
+   dono do projeto Personal que vai receber os workflows). Escopos: `workflow:create`, `workflow:update`,
    `folder:create` e os de leitura (`workflow:read`, `folder:read`). Confira os nomes na tela de criação.
-   Guarde o valor na hora: ele não aparece de novo.
-2. **No n8n de produção**, crie uma credencial **n8n API** com essa chave e o endereço da instância. Nome
-   sugerido: `dev geral (escrita)`.
-3. **Importe** `Portal_WF_Importar.json` (Import from file). Nos 3 nodes `... (automakerdev_geral)` escolha
-   a credencial do passo 2 (o arquivo traz um ID provisório, `TROCAR_APOS_IMPORTAR`).
-4. Confira em **Checar Permissao** o `projetoId` (ID do projeto Personal: na URL do n8n,
-   `/projects/<ID>/workflows`) e, se quiser, `EMAILS_PERMITIDOS`.
+   Se a chave já é usada pelo `Portal_WF_Exportar`, basta acrescentar os escopos e manter a mesma credencial
+   n8n API no n8n de produção (`prod`, `automaker 1`, `dev geral`): o arquivo usa esses mesmos nomes.
+2. **Importe** `Portal_WF_Importar.json` (Import from file). Em cada nó `Criar Pasta`, `Criar Workflow` e
+   `Atualizar Workflow` confira a credencial: o arquivo do repositório traz um ID provisório
+   (`TROCAR_APOS_IMPORTAR`) e é preciso escolher a credencial de cada instância.
+3. Em **Checar Permissao**, preencha o `projetoId` de cada instância (ID do projeto Personal da chave: na URL do
+   n8n, `/projects/<ID>/workflows`). Só a Dev Geral vem preenchida; as demais ficam escondidas até isso.
+4. Se quiser, limite quem importa em `EMAILS_PERMITIDOS` (no mesmo node). Como agora há escrita em **Produção**,
+   vale restringir a poucos e-mails.
 5. **Publique** o workflow. O caminho do webhook é `portal-wf-importar` (POST).
 6. No **Portal_Acesso**, no node *Montar Resposta*, acrescente o recurso para quem é ADMIN:
 
