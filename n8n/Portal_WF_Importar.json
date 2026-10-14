@@ -1,0 +1,1669 @@
+{
+  "name": "Portal_WF_Importar",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "portal-wf-importar",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        400
+      ],
+      "id": "8ea823e2-f205-4c3c-833d-073fa2bf301f",
+      "name": "Receber Pedido",
+      "webhookId": "fc649e21-268d-457e-be08-e57f69661f77"
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $input.first().json;\nconst auth = String((req.headers || {}).authorization || '').trim();\nconst jwt = auth.split(' ').pop().split('.')[1] || '';\nlet email = '';\ntry {\n  email = String(JSON.parse(Buffer.from(jwt, 'base64url').toString('utf8')).sub || '').trim().toLowerCase();\n} catch (e) {\n  email = '';\n}\nconst corpo = (req.body && typeof req.body === 'object') ? req.body : {};\nconst t = v => String(v || '').trim();\nreturn [{ json: { auth, email, acao: t(corpo.acao).toLowerCase(), instancia: t(corpo.instancia).toLowerCase(), itens: Array.isArray(corpo.itens) ? corpo.itens : null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        400
+      ],
+      "id": "fbb999ce-250b-4747-898c-c1babc96f1e0",
+      "name": "Ler Credencial"
+    },
+    {
+      "parameters": {
+        "url": "https://monint.citelsoftware.com.br/usuarios/me",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.auth }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        400
+      ],
+      "id": "a60691fd-f84e-484f-953b-e1afed64b8bd",
+      "name": "Validar Token no Monint"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "66b50db1-f8e8-4ed0-a2a2-9763496ce361",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "1ec7b7f3-9def-4612-9306-0bf66cc8152d",
+              "leftValue": "={{ $('Ler Credencial').item.json.email }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        780,
+        400
+      ],
+      "id": "48ea246c-840a-4e3f-85be-68624132dba3",
+      "name": "Token Valido?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"Token inválido ou expirado\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        780,
+        800
+      ],
+      "id": "a9ba052b-c607-4329-988e-1e5b368eeea5",
+      "name": "Responder 401"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cred = $('Ler Credencial').first().json;\nconst eu = $('Validar Token no Monint').first().json.body || {};\nconst admin = String(eu.perfil || '').trim().toUpperCase() === 'ADMIN';\nconst email = String(eu.email || cred.email).trim().toLowerCase();\n\n// Quem pode importar: todo usuario ADMIN, ou so os e-mails desta lista (vazia = todo ADMIN).\nconst EMAILS_PERMITIDOS = [];\n\n// Instancias que aceitam importacao. projetoId e o ID do projeto Personal da chave de escrita (na URL do n8n:\n// /projects/<ID>/workflows). Enquanto estiver como TROCAR_..., a instancia nao aparece nem recebe importacao.\n// Para liberar outra, acrescente uma linha aqui, crie os 3 nodes HTTP dela (Criar Pasta, Criar Workflow, Atualizar\n// Workflow, com a credencial de ESCRITA daquela instancia) e uma saida nos 3 nodes \"Qual Instancia?\".\nconst INSTANCIAS = {\n  automaker_prod: { nome: 'Produção', baseUrl: 'https://n8n-prod.citel.app', projetoId: 'TROCAR_PELO_ID_DO_PROJETO' },\n  automaker_1: { nome: 'Automaker 1', baseUrl: 'https://automaker.citelsoftware.com.br', projetoId: 'TROCAR_PELO_ID_DO_PROJETO' },\n  automakerdev_geral: { nome: 'Automaker Dev Geral', baseUrl: 'https://automakerdev.citelsoftware.com.br', projetoId: 'zQ1MIpWe3DPkm3hw' }\n};\nconst pronta = i => !!i && !!i.projetoId && !/^TROCAR/.test(i.projetoId);\n\nconst emailOk = EMAILS_PERMITIDOS.length === 0 || EMAILS_PERMITIDOS.includes(email);\nconst existe = Object.prototype.hasOwnProperty.call(INSTANCIAS, cred.instancia) && pronta(INSTANCIAS[cred.instancia]);\nconst instancias = Object.keys(INSTANCIAS).filter(id => pronta(INSTANCIAS[id])).map(id => ({ id, nome: INSTANCIAS[id].nome }));\nreturn [{ json: {\n  permitido: admin && emailOk,\n  email,\n  acao: cred.acao,\n  instancia: cred.instancia,\n  itens: cred.itens,\n  instancias,\n  baseUrl: existe ? INSTANCIAS[cred.instancia].baseUrl : '',\n  projetoId: existe ? INSTANCIAS[cred.instancia].projetoId : ''\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        400
+      ],
+      "id": "ce7fd710-09a9-4d64-9a4c-b555a67fa92b",
+      "name": "Checar Permissao"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "91d58276-fa6a-4f7a-85b2-184dd74e8763",
+              "leftValue": "={{ $json.permitido }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1300,
+        400
+      ],
+      "id": "d5453426-31a6-4fae-bdbf-65500d412b15",
+      "name": "Tem Acesso?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"Sem acesso a este recurso\"}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1300,
+        800
+      ],
+      "id": "0457dbcd-bb28-42e2-8d4d-229eb560046e",
+      "name": "Responder 403"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Checar Permissao').first().json;\nconst ACOES = ['instancias', 'criar-pastas', 'criar-workflows', 'atualizar-workflows'];\nconst falha = (status, erro) => [{ json: { ok: false, status, erro } }];\n\nif (!ACOES.includes(ctx.acao)) { return falha(400, 'Ação inválida'); }\nif (ctx.acao === 'instancias') { return [{ json: { ok: true, acao: ctx.acao } }]; }\nif (!ctx.baseUrl) { return falha(403, 'A importação não está liberada para esta instância.'); }\n\nconst itens = ctx.itens;\nif (!Array.isArray(itens) || itens.length < 1 || itens.length > 25) { return falha(400, 'Envie de 1 a 25 itens por pedido.'); }\n\nconst objeto = v => v !== null && typeof v === 'object' && !Array.isArray(v);\nconst idOk = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);\nconst vazio = v => v === null || v === undefined;\nconst PERMITIDOS = ['name', 'nodes', 'connections', 'settings', 'pinData', 'staticData', 'description', 'nodeGroups'];\n\nfor (let i = 0; i < itens.length; i++) {\n  const it = itens[i];\n  const onde = 'item ' + (i + 1) + ': ';\n  if (!objeto(it) || typeof it.chave !== 'string' || it.chave.length < 1 || it.chave.length > 600) { return falha(400, onde + 'chave inválida.'); }\n  if (ctx.acao === 'criar-pastas') {\n    if (typeof it.nome !== 'string' || !it.nome.trim() || it.nome.length > 128) { return falha(400, onde + 'nome de pasta inválido (1 a 128 caracteres).'); }\n    if (!vazio(it.paiId) && !idOk(it.paiId)) { return falha(400, onde + 'pasta-mãe inválida.'); }\n    continue;\n  }\n  const w = it.workflow;\n  if (!objeto(w)) { return falha(400, onde + 'falta o workflow.'); }\n  if (typeof w.name !== 'string' || !w.name.trim() || w.name.length > 128) { return falha(400, onde + 'nome do workflow inválido (1 a 128 caracteres).'); }\n  if (!Array.isArray(w.nodes) || w.nodes.length > 3000) { return falha(400, onde + 'lista de nodes inválida.'); }\n  if (!objeto(w.connections) || !objeto(w.settings)) { return falha(400, onde + 'connections e settings são obrigatórios.'); }\n  const estranho = Object.keys(w).find(k => !PERMITIDOS.includes(k));\n  if (estranho) { return falha(400, onde + 'propriedade não permitida: ' + estranho + '.'); }\n  if (JSON.stringify(w).length > 8000000) { return falha(400, onde + 'workflow grande demais (limite de 8 MB).'); }\n  if (ctx.acao === 'criar-workflows') {\n    if (!vazio(it.pastaId) && !idOk(it.pastaId)) { return falha(400, onde + 'pasta inválida.'); }\n  } else if (!idOk(it.id)) {\n    return falha(400, onde + 'ID do workflow inválido.');\n  }\n}\nreturn [{ json: { ok: true, acao: ctx.acao } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        400
+      ],
+      "id": "c9fa315f-898d-4d00-9d3b-ba1fd6aeecf0",
+      "name": "Validar Pedido"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "70013d57-ab60-455a-837d-af2a6d898509",
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1820,
+        400
+      ],
+      "id": "8ff77e69-b4d7-4505-99a1-5dc8576b0574",
+      "name": "Pedido Valido?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: $json.erro }) }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1820,
+        800
+      ],
+      "id": "2415e9d6-ccb7-437b-9420-7def6cb8582e",
+      "name": "Responder Erro"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "instancias",
+                    "id": "170a46f7-2363-477b-97e1-ad64f8d532eb"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "instancias"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "criar-pastas",
+                    "id": "77a47d15-fc31-47aa-997c-13392eb5b04d"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "criar-pastas"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "criar-workflows",
+                    "id": "52c5f123-bce2-4918-a2ff-85a0ce9329c7"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "criar-workflows"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.acao }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "atualizar-workflows",
+                    "id": "b296e31e-c028-49f0-bfc9-05187a8b1ea0"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "atualizar-workflows"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "outra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2080,
+        400
+      ],
+      "id": "d2741404-5ecf-4e9e-a0a2-80d2c0c99bc0",
+      "name": "Qual Acao?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"Ação inválida\"}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2340,
+        1000
+      ],
+      "id": "3bdfebdf-5e14-4dc0-830f-33097a19f667",
+      "name": "Responder 400"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ instancias: $('Checar Permissao').first().json.instancias }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2340,
+        0
+      ],
+      "id": "d433aff0-4581-4fa6-abc2-5bffc5dca82c",
+      "name": "Responder Instancias"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Checar Permissao').first().json;\nreturn ctx.itens.map(it => ({ json: {\n  chave: it.chave,\n  baseUrl: ctx.baseUrl,\n  projetoId: ctx.projetoId,\n  instancia: ctx.instancia,\n  corpo: Object.assign({ name: it.nome.trim() }, it.paiId ? { parentFolderId: it.paiId } : {})\n} }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        1600
+      ],
+      "id": "4f5c3f6e-550a-4dd0-b03f-5b4fcc0dac6f",
+      "name": "Preparar Pastas"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_prod",
+                    "id": "1e0fc02b-bb6f-407d-876a-035e7b68f5f3"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_prod"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_1",
+                    "id": "7b65dfec-7b78-4631-9f2a-4e4cca2df365"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automakerdev_geral",
+                    "id": "d8aa1251-0073-4351-a1a9-a42622f53445"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automakerdev_geral"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "outra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2600,
+        1600
+      ],
+      "id": "a216037b-8ad8-4fa2-a474-f356b2b9b2f8",
+      "name": "Qual Instancia? (pastas)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const enviados = $('Preparar Pastas').all();\nconst respostas = $input.all();\nconst resultados = enviados.map((it, i) => {\n  const chave = it.json.chave;\n  const r = (respostas[i] || {}).json || {};\n  if (r.error) { return { chave, erro: String((r.error && r.error.message) || r.error).slice(0, 300) }; }\n  const status = Number(r.statusCode);\n  const corpo = (r.body && typeof r.body === 'object') ? r.body : {};\n  if (status >= 200 && status < 300 && corpo.id) { return { chave, id: String(corpo.id) }; }\n  const motivo = corpo.message ? String(corpo.message) : JSON.stringify(corpo);\n  return { chave, erro: ('HTTP ' + (status || '?') + ' - ' + motivo).slice(0, 400) };\n});\nreturn [{ json: { corpo: JSON.stringify({ resultados }) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        1600
+      ],
+      "id": "8b4ec858-978e-4e94-a1eb-100be9282a83",
+      "name": "Montar Resposta (pastas)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/projects/{{ $json.projetoId }}/folders",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        1400
+      ],
+      "id": "4c900dce-1fc2-4547-815a-4a3bb7ae79e1",
+      "name": "Criar Pasta (automaker_prod)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "prod"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/projects/{{ $json.projetoId }}/folders",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        1600
+      ],
+      "id": "04d6e871-7c51-44e8-8261-bf7ceeec6293",
+      "name": "Criar Pasta (automaker_1)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "automaker 1"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/projects/{{ $json.projetoId }}/folders",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        1800
+      ],
+      "id": "3433059c-2dce-4006-bb91-f59cff632e90",
+      "name": "Criar Pasta (automakerdev_geral)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "dev geral"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.corpo }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3380,
+        1600
+      ],
+      "id": "60d193cd-2065-4114-8c0d-48c6890a3db2",
+      "name": "Responder Pastas"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Checar Permissao').first().json;\n// O projeto e a pasta vem so do servidor/validacao: o workflow do navegador nunca traz projectId nem parentFolderId.\nreturn ctx.itens.map(it => ({ json: {\n  chave: it.chave,\n  baseUrl: ctx.baseUrl,\n  instancia: ctx.instancia,\n  corpo: Object.assign({}, it.workflow, { projectId: ctx.projetoId }, it.pastaId ? { parentFolderId: it.pastaId } : {})\n} }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        2400
+      ],
+      "id": "fb8b957e-34c2-437c-986d-a04eab73346a",
+      "name": "Preparar Workflows"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_prod",
+                    "id": "e1d3abc6-b815-4060-a348-2190257542df"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_prod"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_1",
+                    "id": "e299fb8f-906a-4b57-ad7c-0e001e31b295"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automakerdev_geral",
+                    "id": "081e0899-6658-4cad-a05a-27710b3bc10a"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automakerdev_geral"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "outra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2600,
+        2400
+      ],
+      "id": "e961dce3-4487-4719-87d0-26fec6dc6640",
+      "name": "Qual Instancia? (workflows)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const enviados = $('Preparar Workflows').all();\nconst respostas = $input.all();\nconst resultados = enviados.map((it, i) => {\n  const chave = it.json.chave;\n  const r = (respostas[i] || {}).json || {};\n  if (r.error) { return { chave, erro: String((r.error && r.error.message) || r.error).slice(0, 300) }; }\n  const status = Number(r.statusCode);\n  const corpo = (r.body && typeof r.body === 'object') ? r.body : {};\n  if (status >= 200 && status < 300 && corpo.id) { return { chave, id: String(corpo.id) }; }\n  const motivo = corpo.message ? String(corpo.message) : JSON.stringify(corpo);\n  return { chave, erro: ('HTTP ' + (status || '?') + ' - ' + motivo).slice(0, 400) };\n});\nconst criados = resultados.filter(r => r.id);\nconst nomes = enviados.filter((it, i) => resultados[i].id).map(it => it.json.corpo.name).join(' | ').slice(0, 1800);\nreturn [{ json: { corpo: JSON.stringify({ resultados }), logQtd: criados.length, logNomes: nomes } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        2400
+      ],
+      "id": "b927b796-0425-4431-bb60-ad2ecd6313e6",
+      "name": "Montar Resposta (workflows)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        2200
+      ],
+      "id": "46ff2f35-811a-49f8-9832-3c4c0b8310af",
+      "name": "Criar Workflow (automaker_prod)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "prod"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        2400
+      ],
+      "id": "36f1f2d9-8a51-4e22-b061-3d8c3d48f4b3",
+      "name": "Criar Workflow (automaker_1)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "automaker 1"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        2600
+      ],
+      "id": "f70e628d-caef-49d3-ac48-a6e9b29d2277",
+      "name": "Criar Workflow (automakerdev_geral)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "dev geral"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "portal_wf_log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $('Checar Permissao').first().json.email }}",
+            "instancia": "={{ $('Checar Permissao').first().json.instancia }}",
+            "arquivos": "={{ $('Montar Resposta (workflows)').first().json.logQtd }}",
+            "nomes": "={{ '[IMPORTACAO] ' + $('Montar Resposta (workflows)').first().json.logNomes }}"
+          },
+          "schema": [
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "instancia",
+              "displayName": "instancia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "arquivos",
+              "displayName": "arquivos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nomes",
+              "displayName": "nomes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3380,
+        2400
+      ],
+      "id": "af67d9e1-da0c-4aa1-a302-bae8107ed494",
+      "name": "Registrar Importacao",
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $('Montar Resposta (workflows)').first().json.corpo }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3640,
+        2400
+      ],
+      "id": "ac023945-ce5f-4fef-a6b7-c7aff4ff8aab",
+      "name": "Responder Workflows"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Checar Permissao').first().json;\nreturn ctx.itens.map(it => ({ json: {\n  chave: it.chave,\n  id: it.id,\n  baseUrl: ctx.baseUrl,\n  instancia: ctx.instancia,\n  corpo: it.workflow\n} }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        3200
+      ],
+      "id": "b27986d7-4c06-486c-8260-4c4ff4a5fdab",
+      "name": "Preparar Atualizacoes"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_prod",
+                    "id": "dc565508-6737-41df-b2e4-4aa7c3a23ab0"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_prod"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automaker_1",
+                    "id": "2498f77e-f2fc-4ec4-b079-ef70389f632e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automaker_1"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.instancia }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "automakerdev_geral",
+                    "id": "09022647-11da-417b-820c-b98378f7791a"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "automakerdev_geral"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "outra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2600,
+        3200
+      ],
+      "id": "e71c6945-56d7-46da-a6e5-ac84f227cd0f",
+      "name": "Qual Instancia? (atualizar)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const enviados = $('Preparar Atualizacoes').all();\nconst respostas = $input.all();\nconst resultados = enviados.map((it, i) => {\n  const chave = it.json.chave;\n  const r = (respostas[i] || {}).json || {};\n  if (r.error) { return { chave, erro: String((r.error && r.error.message) || r.error).slice(0, 300) }; }\n  const status = Number(r.statusCode);\n  const corpo = (r.body && typeof r.body === 'object') ? r.body : {};\n  if (status >= 200 && status < 300 && corpo.id) { return { chave, id: String(corpo.id) }; }\n  const motivo = corpo.message ? String(corpo.message) : JSON.stringify(corpo);\n  return { chave, erro: ('HTTP ' + (status || '?') + ' - ' + motivo).slice(0, 400) };\n});\nreturn [{ json: { corpo: JSON.stringify({ resultados }) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        3200
+      ],
+      "id": "ee27fbc0-875b-44ea-b2ac-3d4aa28d404d",
+      "name": "Montar Resposta (atualizar)"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "publishIfActive",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        3000
+      ],
+      "id": "79a08e1c-b9d0-4fe3-9377-48b0c332300e",
+      "name": "Atualizar Workflow (automaker_prod)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "prod"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "publishIfActive",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        3200
+      ],
+      "id": "3a950b90-dcc1-4248-bb39-aa7e54cd89d1",
+      "name": "Atualizar Workflow (automaker_1)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "automaker 1"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.baseUrl }}/api/v1/workflows/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "n8nApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.corpo }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "publishIfActive",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        3400
+      ],
+      "id": "9745fefd-6063-44e0-8a16-8366f020e93b",
+      "name": "Atualizar Workflow (automakerdev_geral)",
+      "credentials": {
+        "n8nApi": {
+          "id": "TROCAR_APOS_IMPORTAR",
+          "name": "dev geral"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.corpo }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3380,
+        3200
+      ],
+      "id": "0562138f-f3be-4016-8571-e62a365e1789",
+      "name": "Responder Atualizacoes"
+    },
+    {
+      "parameters": {
+        "height": 480,
+        "width": 560,
+        "content": "## Portal_WF_Importar\nRecebe do portal (POST /wf-importar) a importação de workflows e pastas e escreve na instância.\n\n**Segurança**\n- Só usuário ADMIN do Monint (token validado em /usuarios/me). Para limitar a e-mails, preencha `EMAILS_PERMITIDOS` em *Checar Permissao*.\n- Só as instâncias listadas em `INSTANCIAS` (*Checar Permissao*). A credencial de ESCRITA de cada uma fica nos 3 nodes HTTP dela (as mesmas credenciais n8n API do Portal_WF_Exportar, agora com escopo de escrita).\n- Instância com `projetoId` ainda como TROCAR_... em *Checar Permissao* fica escondida: preencha com o ID do projeto Personal (URL do n8n: /projects/<ID>/workflows).\n- Nunca sobrescreve: só cria pastas e workflows (inativos) e atualiza os que acabou de criar para ligar as chamadas entre eles.\n- Cada importação fica em *portal_wf_log* com o e-mail e os nomes.\n\n**Credencial** (tipo n8n API) com escopos de escrita: `workflow:create`, `workflow:update`, `folder:create` e leitura (`workflow:read`, `folder:read`).\n\n**Outra instância:** acrescente em `INSTANCIAS`, clone os 3 nodes HTTP (com a credencial dela) e acrescente uma saída nos 3 *Qual Instancia?*.\n\n**Acesso à aba:** o recurso `workflows-importar` precisa estar na resposta do Portal_Acesso."
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1000
+      ],
+      "id": "7cf65db4-eb09-4086-9903-40f39a413bb7",
+      "name": "Leia-me"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receber Pedido": {
+      "main": [
+        [
+          {
+            "node": "Ler Credencial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Credencial": {
+      "main": [
+        [
+          {
+            "node": "Validar Token no Monint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Token no Monint": {
+      "main": [
+        [
+          {
+            "node": "Token Valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Valido?": {
+      "main": [
+        [
+          {
+            "node": "Checar Permissao",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Checar Permissao": {
+      "main": [
+        [
+          {
+            "node": "Tem Acesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Acesso?": {
+      "main": [
+        [
+          {
+            "node": "Validar Pedido",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Pedido": {
+      "main": [
+        [
+          {
+            "node": "Pedido Valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pedido Valido?": {
+      "main": [
+        [
+          {
+            "node": "Qual Acao?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qual Acao?": {
+      "main": [
+        [
+          {
+            "node": "Responder Instancias",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Pastas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Workflows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Atualizacoes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Pastas": {
+      "main": [
+        [
+          {
+            "node": "Qual Instancia? (pastas)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qual Instancia? (pastas)": {
+      "main": [
+        [
+          {
+            "node": "Criar Pasta (automaker_prod)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar Pasta (automaker_1)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar Pasta (automakerdev_geral)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Pasta (automaker_prod)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (pastas)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Pasta (automaker_1)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (pastas)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Pasta (automakerdev_geral)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (pastas)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Resposta (pastas)": {
+      "main": [
+        [
+          {
+            "node": "Responder Pastas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Workflows": {
+      "main": [
+        [
+          {
+            "node": "Qual Instancia? (workflows)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qual Instancia? (workflows)": {
+      "main": [
+        [
+          {
+            "node": "Criar Workflow (automaker_prod)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar Workflow (automaker_1)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Criar Workflow (automakerdev_geral)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Workflow (automaker_prod)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (workflows)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Workflow (automaker_1)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (workflows)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar Workflow (automakerdev_geral)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (workflows)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Resposta (workflows)": {
+      "main": [
+        [
+          {
+            "node": "Registrar Importacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Importacao": {
+      "main": [
+        [
+          {
+            "node": "Responder Workflows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Atualizacoes": {
+      "main": [
+        [
+          {
+            "node": "Qual Instancia? (atualizar)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qual Instancia? (atualizar)": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Workflow (automaker_prod)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Atualizar Workflow (automaker_1)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Atualizar Workflow (automakerdev_geral)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Workflow (automaker_prod)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (atualizar)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Workflow (automaker_1)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (atualizar)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Workflow (automakerdev_geral)": {
+      "main": [
+        [
+          {
+            "node": "Montar Resposta (atualizar)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar Resposta (atualizar)": {
+      "main": [
+        [
+          {
+            "node": "Responder Atualizacoes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": null,
+  "tags": []
+}
