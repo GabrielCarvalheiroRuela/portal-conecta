@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, apiGet, ehAdmin } from '../services/api'
+import { ApiError, apiGet } from '../services/api'
 import type { PedidoDoCliente } from '../types/monitoramento'
 import { ModalReprocessarPedido } from './ModalReprocessarPedido'
 import { Alerta } from './ui/Alerta'
@@ -82,8 +82,7 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
   const [emReprocesso, setEmReprocesso] = useState<PedidoDoCliente | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
 
-  // O botão só existe para admin; a API responde 403 a quem tentar por fora e 409 se não houver erro.
-  const admin = ehAdmin()
+  // O botão é de todo usuário interno (admin ou comum); a API responde 409 se o pedido não estiver com erro.
 
   const carregar = useCallback(() => {
     setCarregando(true)
@@ -321,7 +320,7 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
                 { rotulo: 'Mensagem', className: 'w-full' },
                 { rotulo: 'Processamentos' },
                 { rotulo: 'Última alteração' },
-                ...(admin ? [{ rotulo: 'Ações' }] : []),
+                { rotulo: 'Ações' },
               ]}
             >
               {visiveis.map((p) => {
@@ -360,7 +359,7 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
                     <Celula className="whitespace-nowrap text-center tabular-nums text-slate-600">
                       {p.sequencialProcessamento ?? '—'}
                     </Celula>
-                    <Celula ultima={!admin} className="whitespace-nowrap tabular-nums">
+                    <Celula className="whitespace-nowrap tabular-nums">
                       {quando ? (
                         <>
                           <div className="text-slate-700">{quando.data}</div>
@@ -370,26 +369,24 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
                         <span className="text-slate-400">—</span>
                       )}
                     </Celula>
-                    {admin && (
-                      <Celula ultima className="whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setEmReprocesso(p)}
-                          disabled={p.status !== 2}
-                          title={
-                            p.status === 2
-                              ? `Reprocessar o pedido ${p.codigoPedido}`
-                              : 'Só pedidos com erro podem ser reprocessados'
-                          }
-                          aria-label={`Reprocessar o pedido ${p.codigoPedido}`}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-all duration-150 hover:bg-slate-100 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/25 active:scale-95 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent disabled:hover:text-slate-300 disabled:active:scale-100"
-                        >
-                          <span className="h-4 w-4">
-                            <IconeReciclar />
-                          </span>
-                        </button>
-                      </Celula>
-                    )}
+                    <Celula ultima className="whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setEmReprocesso(p)}
+                        disabled={p.status !== 2}
+                        title={
+                          p.status === 2
+                            ? `Reprocessar o pedido ${p.codigoPedido}`
+                            : 'Só pedidos com erro podem ser reprocessados'
+                        }
+                        aria-label={`Reprocessar o pedido ${p.codigoPedido}`}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-all duration-150 hover:bg-slate-100 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/25 active:scale-95 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent disabled:hover:text-slate-300 disabled:active:scale-100"
+                      >
+                        <span className="h-4 w-4">
+                          <IconeReciclar />
+                        </span>
+                      </button>
+                    </Celula>
                   </Linha>
                 )
               })}
