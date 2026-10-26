@@ -14,6 +14,7 @@ import {
   CampoBusca,
   CartaoConsulta,
   Celula,
+  Codigo,
   EstadoVazio,
   EtiquetaPlataforma,
   Linha,
@@ -84,6 +85,7 @@ export function PainelFilas({
   const limpar = () => setFiltros(FILTROS_PADRAO)
 
   const colunas = [
+    { rotulo: 'Código' },
     { rotulo: 'Cliente' },
     { rotulo: 'Plataforma' },
     ...FILAS.map((fila) => ({
@@ -180,8 +182,11 @@ export function PainelFilas({
       ) : (
         <Tabela colunas={colunas} arrastavel>
           {visiveis.map((l) => (
-            <Linha key={l.cliente}>
-              <Celula primeira className="whitespace-nowrap font-medium text-slate-900">
+            <Linha key={l.id}>
+              <Celula primeira className="whitespace-nowrap">
+                <Codigo>{l.codigo || '—'}</Codigo>
+              </Celula>
+              <Celula className="whitespace-nowrap font-medium text-slate-900">
                 <span className="inline-flex items-center gap-2">
                   {l.cliente.toUpperCase()}
                   {l.filasEmAtencao.length > 0 && (

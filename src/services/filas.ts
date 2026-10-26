@@ -18,10 +18,11 @@ export const INTERVALO_FILAS_MS = 300_000
 /** O n8n devolve uma lista de objetos { "NOME DO CLIENTE": { Plataforma, Estoque, ... } }. */
 async function carregarFilas(): Promise<RetratoFilas> {
   const resposta = await apiGet<Record<string, ClienteFilas>[]>('', BASE_FILAS)
-  const clientes: Record<string, ClienteFilas> = {}
-  for (const item of Array.isArray(resposta) ? resposta : []) {
-    Object.assign(clientes, item)
-  }
+  // Uma linha por item: o mesmo nome de cliente se repete (uma integração por código), então não dá
+  // para indexar por nome sem perder todos menos o último.
+  const clientes = (Array.isArray(resposta) ? resposta : []).flatMap((item) =>
+    Object.entries(item).map(([cliente, dados]) => ({ cliente, dados })),
+  )
   // O n8n não informa a hora da coleta; vale a hora em que a resposta chegou.
   return { geradoEm: new Date().toISOString(), clientes }
 }

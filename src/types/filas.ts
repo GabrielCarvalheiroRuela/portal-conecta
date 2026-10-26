@@ -54,17 +54,25 @@ export const LIMITE_ATENCAO: Record<NomeFila, number> = {
  */
 export type ValorFila = number | string | null | undefined
 
-/** Um cliente do retrato: a plataforma e o tamanho de cada fila. */
+/** Um cliente do retrato: o código da integração, a plataforma e o tamanho de cada fila. */
 export interface ClienteFilas {
+  /** Código da integração (ex.: "0000004"); vem como texto para manter os zeros à esquerda. */
+  Codaut?: string
   Plataforma: string
   [fila: string]: ValorFila
+}
+
+/** Um item do retrato. O mesmo nome de cliente pode vir mais de uma vez: cada integração é um item. */
+export interface ItemRetratoFilas {
+  cliente: string
+  dados: ClienteFilas
 }
 
 /** Resposta do GET /filas. */
 export interface RetratoFilas {
   /** Quando o n8n terminou a última coleta (ISO 8601). */
   geradoEm: string
-  clientes: Record<string, ClienteFilas>
+  clientes: ItemRetratoFilas[]
 }
 
 export type SituacaoFila = 'ok' | 'atencao' | 'sem-dado'
@@ -79,7 +87,11 @@ export function situacaoDaFila(fila: NomeFila, valor: ValorFila): SituacaoFila {
 
 /** Um cliente do retrato já classificado. */
 export interface LinhaFilas {
+  /** Identifica a linha (o nome do cliente sozinho se repete). */
+  id: string
   cliente: string
+  /** Codaut do n8n; vazio quando o n8n não informa. */
+  codigo: string
   plataforma: string
   dados: ClienteFilas
   /** Filas deste cliente acima do limite. */
@@ -91,15 +103,19 @@ export function classificarClientes(retrato: RetratoFilas | null): LinhaFilas[] 
   if (!retrato) {
     return []
   }
-  return Object.entries(retrato.clientes)
-    .map(([cliente, dados]) => ({
+  return retrato.clientes
+    .map(({ cliente, dados }, posicao) => ({
+      id: `${dados.Codaut ?? posicao}|${cliente}`,
       cliente,
+      codigo: dados.Codaut ?? '',
       plataforma: dados.Plataforma,
       dados,
       filasEmAtencao: FILAS.filter((fila) => situacaoDaFila(fila, dados[fila]) === 'atencao'),
     }))
     .sort(
       (a, b) =>
-        b.filasEmAtencao.length - a.filasEmAtencao.length || a.cliente.localeCompare(b.cliente, 'pt-BR'),
+        b.filasEmAtencao.length - a.filasEmAtencao.length ||
+        a.cliente.localeCompare(b.cliente, 'pt-BR') ||
+        a.codigo.localeCompare(b.codigo),
     )
 }
