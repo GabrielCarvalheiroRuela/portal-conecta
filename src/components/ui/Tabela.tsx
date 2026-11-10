@@ -300,6 +300,19 @@ function useRolagemPorArraste(ativo: boolean) {
   return { ref, arrastando, aoPressionar }
 }
 
+/**
+ * Coluna da Tabela. Com `onOrdenar`, o cabeçalho vira um botão que ordena por ela: `ordenacao` diz o sentido
+ * atual (desc = seta para baixo) e quem usa decide o que o clique faz.
+ */
+export interface ColunaTabela {
+  rotulo: string
+  className?: string
+  ordenacao?: 'asc' | 'desc'
+  onOrdenar?: () => void
+  /** Dica do botão de ordenar. Padrão: a das datas (mais antigos / mais recentes primeiro). */
+  dicaOrdenacao?: string
+}
+
 /** Tabela com cabeçalho fixo e rolagem interna. `arrastavel` deixa rolar puxando com o mouse. */
 export function Tabela({
   colunas,
@@ -307,7 +320,7 @@ export function Tabela({
   alturaMaxima = 'max-h-[75vh]',
   arrastavel = false,
 }: {
-  colunas: { rotulo: string; className?: string }[]
+  colunas: ColunaTabela[]
   children: ReactNode
   alturaMaxima?: string
   arrastavel?: boolean
@@ -327,9 +340,27 @@ export function Tabela({
             {colunas.map((c, i) => (
               <th
                 key={c.rotulo}
+                aria-sort={c.onOrdenar ? (c.ordenacao === 'asc' ? 'ascending' : 'descending') : undefined}
                 className={`whitespace-nowrap py-2.5 ${i === 0 ? 'pl-5 pr-3' : i === colunas.length - 1 ? 'pl-3 pr-5' : 'px-3'} ${c.className ?? ''}`}
               >
-                {c.rotulo}
+                {c.onOrdenar ? (
+                  <button
+                    type="button"
+                    onClick={c.onOrdenar}
+                    title={
+                      c.dicaOrdenacao ??
+                      (c.ordenacao === 'asc' ? 'Mais antigos primeiro: clique para inverter' : 'Mais recentes primeiro: clique para inverter')
+                    }
+                    className="inline-flex items-center gap-1 uppercase tracking-[0.06em] text-slate-700 transition-colors hover:text-brand-700"
+                  >
+                    {c.rotulo}
+                    <span aria-hidden="true" className="text-[13px] leading-none">
+                      {c.ordenacao === 'asc' ? '↑' : '↓'}
+                    </span>
+                  </button>
+                ) : (
+                  c.rotulo
+                )}
               </th>
             ))}
           </tr>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { apiGet } from '../services/api'
 import {
   assinarFilas,
@@ -7,7 +7,7 @@ import {
   sincronizarFilas,
 } from '../services/filas'
 import { classificarClientes } from '../types/filas'
-import type { PedidoComErro, ProdutoComErro } from '../types/monitoramento'
+import type { FiltrosProdutos, PaginaProdutos, PedidoComErro, ProdutoComErro } from '../types/monitoramento'
 import { PainelFilas } from './PainelFilas'
 import { IconeAlerta, IconeCaixa, IconeCheck, IconeEtiqueta, IconeLupa, IconePessoas } from './ui/Icones'
 import {
@@ -72,6 +72,69 @@ interface Filtros {
 
 const FILTROS_VAZIOS: Filtros = { codigo: '', cliente: '', plataforma: '', erro: '' }
 
+/** 0 = todos os registros numa página só (a API trata tamanho=0 assim). */
+type TamanhoPagina = 50 | 100 | 1000 | 0
+const TAMANHOS_PAGINA: TamanhoPagina[] = [50, 100, 1000, 0]
+const rotuloTamanho = (t: TamanhoPagina) => (t === 0 ? 'Todos' : String(t))
+type Ordem = 'desc' | 'asc'
+
+/** Espera depois da última tecla antes de pesquisar na API: evita uma consulta por letra digitada. */
+const ESPERA_PESQUISA_MS = 400
+
+/**
+ * O que o GET /produtos recebe: página, tamanho, ordem e os filtros. Cliente e plataforma são escolhas
+ * entre as opções do GET /produtos/filtros; produto e erro são texto. Tudo é filtrado pela API em todos
+ * os registros, não só nos da página que está na tela.
+ */
+interface ConsultaProdutos {
+  /** Começa em 1. */
+  pagina: number
+  tamanho: TamanhoPagina
+  /** Pela data do erro: desc = mais recente primeiro (o padrão). */
+  ordem: Ordem
+  produto: string
+  cliente: string
+  plataforma: string
+  erro: string
+}
+
+const CONSULTA_PRODUTOS_INICIAL: ConsultaProdutos = {
+  pagina: 1,
+  tamanho: 50,
+  ordem: 'desc',
+  produto: '',
+  cliente: '',
+  plataforma: '',
+  erro: '',
+}
+
+function montarQueryProdutos(c: ConsultaProdutos): string {
+  const params = new URLSearchParams({ pagina: String(c.pagina), tamanho: String(c.tamanho), ordem: c.ordem })
+  const filtros = { produtoContem: c.produto, cliente: c.cliente, plataforma: c.plataforma, erroContem: c.erro }
+  for (const [nome, valor] of Object.entries(filtros)) {
+    if (valor) params.set(nome, valor)
+  }
+  return params.toString()
+}
+
+/** Os filtros da tela no formato da consulta (sem espaços nas pontas). */
+function pesquisasDe(filtros: Filtros): Pick<ConsultaProdutos, 'produto' | 'cliente' | 'plataforma' | 'erro'> {
+  return {
+    produto: filtros.codigo.trim(),
+    cliente: filtros.cliente.trim(),
+    plataforma: filtros.plataforma.trim(),
+    erro: filtros.erro.trim(),
+  }
+}
+
+/**
+ * Mantém a escolha atual no select mesmo quando a opção some da lista (o último produto daquele cliente foi
+ * resolvido): sem isso o select cairia em "Todos" sem a pessoa ter mexido, e a tela e a consulta divergiriam.
+ */
+function opcoesCom(opcoes: string[], escolhida: string): string[] {
+  return escolhida && !opcoes.includes(escolhida) ? [...opcoes, escolhida].sort() : opcoes
+}
+
 interface ItemFiltravel {
   cliente?: string | null
   plataforma?: string | null
@@ -104,17 +167,24 @@ const chavePedido = (p: PedidoComErro) => `${p.cliente ?? ''}|${p.plataforma ?? 
  */
 export function Monitoramento() {
   const [subAba, setSubAba] = useState<SubAba>('pedidos')
-  const [carregando, setCarregando] = useState(true)
+  const [pedidosCarregados, setPedidosCarregados] = useState(false)
+  const [produtosCarregados, setProdutosCarregados] = useState(false)
+  const carregando = !(pedidosCarregados && produtosCarregados)
 
   const [pedidos, setPedidos] = useState<PedidoComErro[]>([])
+  // Só a página atual: a API entrega no máximo 100 produtos por consulta.
   const [produtos, setProdutos] = useState<ProdutoComErro[]>([])
-  // O total vem da resposta da API, não da lista mesclada.
+  // O total vem da resposta da API, não da lista na tela. No de produtos, é o de todas as páginas.
   const [totalPedidos, setTotalPedidos] = useState(0)
   const [totalProdutos, setTotalProdutos] = useState(0)
+  const [totalPaginasProdutos, setTotalPaginasProdutos] = useState(0)
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<Date | null>(null)
 
+  // Clientes e plataformas que têm produto com erro, de toda a base e não só da página aberta.
+  const [opcoesProdutos, setOpcoesProdutos] = useState<FiltrosProdutos>({ clientes: [], plataformas: [] })
+
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS)
-  const primeiraCarga = useRef(true)
+  const [consulta, setConsulta] = useState<ConsultaProdutos>(CONSULTA_PRODUTOS_INICIAL)
 
   // O retrato das filas vive no serviço, não aqui: ao trocar de tela e voltar, o último retrato
   // continua na tela e a coleta só acontece quando passam 5 minutos ou a pessoa pede.
@@ -129,8 +199,9 @@ export function Monitoramento() {
   useEffect(() => {
     let ativo = true
 
+    // Falha numa atualização não limpa a tela: fica o último retrato bom até a próxima.
     function carregar() {
-      const buscaPedidos = apiGet<PedidoComErro[]>('/pendentes?status=2')
+      apiGet<PedidoComErro[]>('/pendentes?status=2')
         .then((recebidos) => {
           if (!ativo) return
           setPedidos((atual) => mesclar(atual, recebidos, chavePedido))
@@ -138,25 +209,9 @@ export function Monitoramento() {
           setUltimaAtualizacao(new Date())
         })
         .catch((e: unknown) => console.error('[MONITORAMENTO] Erro ao carregar pedidos', e))
-
-      const buscaProdutos = apiGet<ProdutoComErro[]>('/produtos')
-        // A API chama o campo de mensagemErro; o monitoramento antigo lia "erro" e a coluna vinha vazia.
-        .then((brutos) => brutos.map((p) => ({ ...p, erro: p.mensagemErro ?? p.erro })))
-        .then((recebidos) => {
-          if (!ativo) return
-          setProdutos((atual) => mesclar(atual, recebidos, chaveProduto))
-          setTotalProdutos(recebidos.length)
-          setUltimaAtualizacao(new Date())
+        .finally(() => {
+          if (ativo) setPedidosCarregados(true)
         })
-        .catch((e: unknown) => console.error('[MONITORAMENTO] Erro ao carregar produtos', e))
-
-      // Falha numa atualização não limpa a tela: fica o último retrato bom até a próxima.
-      Promise.all([buscaPedidos, buscaProdutos]).finally(() => {
-        if (ativo && primeiraCarga.current) {
-          primeiraCarga.current = false
-          setCarregando(false)
-        }
-      })
     }
 
     carregar()
@@ -167,40 +222,108 @@ export function Monitoramento() {
     }
   }, [])
 
+  // Produtos: o polling de 10s continua, mas cada GET pede só a página atual. Mudou a página, o tamanho
+  // ou a ordem, o efeito recomeça e já busca na hora; a atualização automática mantém tudo isso.
+  useEffect(() => {
+    let ativo = true
+
+    function carregar() {
+      apiGet<PaginaProdutos>(`/produtos?${montarQueryProdutos(consulta)}`)
+        .then((resposta) => {
+          if (!ativo) return
+          setTotalProdutos(resposta.totalItens)
+          setTotalPaginasProdutos(resposta.totalPaginas)
+          setUltimaAtualizacao(new Date())
+          // Produtos resolvidos podem ter feito a página atual sumir: vai para a última que existe.
+          if (resposta.totalPaginas > 0 && consulta.pagina > resposta.totalPaginas) {
+            setConsulta((c) => ({ ...c, pagina: resposta.totalPaginas }))
+            return
+          }
+          // A API chama o campo de mensagemErro; o monitoramento antigo lia "erro" e a coluna vinha vazia.
+          setProdutos(resposta.itens.map((p) => ({ ...p, erro: p.mensagemErro ?? p.erro })))
+        })
+        .catch((e: unknown) => console.error('[MONITORAMENTO] Erro ao carregar produtos', e))
+        .finally(() => {
+          if (ativo) setProdutosCarregados(true)
+        })
+    }
+
+    carregar()
+    const intervalo = setInterval(carregar, INTERVALO_ATUALIZACAO_MS)
+    return () => {
+      ativo = false
+      clearInterval(intervalo)
+    }
+  }, [consulta])
+
+  // Opções dos filtros de produtos: um GET à parte, leve, que acompanha o ritmo da lista
+  const { cliente: clienteConsultado, plataforma: plataformaConsultada } = consulta
+  useEffect(() => {
+    let ativo = true
+
+    function carregar() {
+      const params = new URLSearchParams()
+      if (clienteConsultado) params.set('cliente', clienteConsultado)
+      if (plataformaConsultada) params.set('plataforma', plataformaConsultada)
+      apiGet<FiltrosProdutos>(`/produtos/filtros?${params.toString()}`)
+        .then((recebidas) => {
+          if (ativo) setOpcoesProdutos(recebidas)
+        })
+        .catch((e: unknown) => console.error('[MONITORAMENTO] Erro ao carregar filtros de produtos', e))
+    }
+
+    carregar()
+    const intervalo = setInterval(carregar, INTERVALO_ATUALIZACAO_MS)
+    return () => {
+      ativo = false
+      clearInterval(intervalo)
+    }
+  }, [clienteConsultado, plataformaConsultada])
+
   const linhasFilas = useMemo(() => classificarClientes(retratoFilas), [retratoFilas])
   const clientesComFilaEmAtencao = useMemo(
     () => linhasFilas.filter((l) => l.filasEmAtencao.length > 0).length,
     [linhasFilas],
   )
 
-  const dadosDaAba: ItemFiltravel[] = subAba === 'produtos' ? produtos : pedidos
-
-  // Linha sem cliente (já houve produto assim na produção) não vira opção do filtro: sem nome, não há o
-  // que escolher. O .toUpperCase() abaixo derrubava a tela inteira com um nulo aqui.
   const clientes = useMemo(
-    () => Array.from(new Set(dadosDaAba.map((i) => i.cliente).filter((c): c is string => !!c))).sort(),
-    [dadosDaAba],
+    () =>
+      subAba === 'produtos'
+        ? opcoesProdutos.clientes
+        : Array.from(new Set(pedidos.map((i) => i.cliente).filter((c): c is string => !!c))).sort(),
+    [subAba, opcoesProdutos, pedidos],
   )
   const plataformas = useMemo(
     () =>
-      Array.from(
-        new Set(dadosDaAba.map((i) => i.plataforma).filter((p): p is string => !!p)),
-      ).sort(),
-    [dadosDaAba],
+      subAba === 'produtos'
+        ? opcoesProdutos.plataformas
+        : Array.from(new Set(pedidos.map((i) => i.plataforma).filter((p): p is string => !!p))).sort(),
+    [subAba, opcoesProdutos, pedidos],
   )
   const clientesAfetados = useMemo(
     () => new Set([...pedidos, ...produtos].map((i) => (i.cliente ?? '').toUpperCase())).size,
     [pedidos, produtos],
   )
 
+  // Pedidos vêm inteiros e são filtrados aqui. Produtos já chegam filtrados pela API.
   const pedidosFiltrados = useMemo(
     () => filtrar(pedidos, filtros, (p) => p.codigoPedido),
     [pedidos, filtros],
   )
-  const produtosFiltrados = useMemo(
-    () => filtrar(produtos, filtros, (p) => p.codigoProduto),
-    [produtos, filtros],
-  )
+
+  // Digitou na aba de produtos: depois de uma pausa, a pesquisa vai para a API (página 1). Fora dessa
+  // aba os filtros não valem para produtos, então a consulta volta a ficar sem pesquisa.
+  useEffect(() => {
+    const alvo = pesquisasDe(subAba === 'produtos' ? filtros : FILTROS_VAZIOS)
+    const espera = setTimeout(() => {
+      setConsulta((c) =>
+        c.produto === alvo.produto && c.cliente === alvo.cliente && c.plataforma === alvo.plataforma && c.erro === alvo.erro
+          ? c
+          : { ...c, ...alvo, pagina: 1 },
+      )
+    }, ESPERA_PESQUISA_MS)
+    return () => clearTimeout(espera)
+  }, [filtros, subAba])
 
   function trocarSubAba(nova: SubAba) {
     setSubAba(nova)
@@ -211,12 +334,31 @@ export function Monitoramento() {
     setFiltros((f) => ({ ...f, [campo]: valor }))
   }
 
+  /** Tamanho ou ordem novos recomeçam da página 1; só navegar entre páginas mantém a posição. */
+  function alterarConsulta(parcial: Partial<ConsultaProdutos>) {
+    setConsulta((c) => ({ ...c, ...parcial, pagina: 1 }))
+  }
+
+  function irParaPagina(pagina: number) {
+    setConsulta((c) => ({ ...c, pagina: Math.min(Math.max(pagina, 1), Math.max(totalPaginasProdutos, 1)) }))
+  }
+
   const ehPedidos = subAba !== 'produtos'
   const total = ehPedidos ? totalPedidos : totalProdutos
-  const semErros = (ehPedidos ? pedidos : produtos).length === 0
-  const visiveis = ehPedidos ? pedidosFiltrados.length : produtosFiltrados.length
   const temFiltro = Object.values(filtros).some(Boolean)
+  // Produtos vazios com pesquisa na consulta é "nada encontrado", não "fila sem erros".
+  const pesquisandoProdutos = [consulta.produto, consulta.cliente, consulta.plataforma, consulta.erro].some(Boolean)
+  const semErros = ehPedidos ? pedidos.length === 0 : produtos.length === 0 && !pesquisandoProdutos
+  const visiveis = ehPedidos ? pedidosFiltrados.length : produtos.length
   const termo = ehPedidos ? 'pedido' : 'produto'
+
+  function limparFiltros() {
+    setFiltros(FILTROS_VAZIOS)
+    // Já limpa a consulta, sem esperar a pausa da digitação.
+    setConsulta((c) =>
+      c.produto || c.cliente || c.plataforma || c.erro ? { ...c, ...pesquisasDe(FILTROS_VAZIOS), pagina: 1 } : c,
+    )
+  }
 
   if (carregando) {
     return (
@@ -229,7 +371,17 @@ export function Monitoramento() {
   const colunas = [
     { rotulo: 'Cliente' },
     { rotulo: 'Plataforma' },
-    ...(ehPedidos ? [{ rotulo: 'Pedido' }] : [{ rotulo: 'Data e hora' }, { rotulo: 'Produto' }]),
+    ...(ehPedidos
+      ? [{ rotulo: 'Pedido' }]
+      : [
+          // A API ordena pela data do erro: mais recentes primeiro de início, e cada clique inverte.
+          {
+            rotulo: 'Data e hora',
+            ordenacao: consulta.ordem,
+            onOrdenar: () => alterarConsulta({ ordem: consulta.ordem === 'desc' ? 'asc' : 'desc' }),
+          },
+          { rotulo: 'Produto' },
+        ]),
     { rotulo: ehPedidos ? 'Processamentos' : 'Tentativas' },
     { rotulo: 'Erro', className: 'w-full' },
     { rotulo: 'Rotina' },
@@ -383,7 +535,7 @@ export function Monitoramento() {
               onChange={(v) => alterarFiltro('cliente', v)}
             >
               <option value="">Todos os clientes</option>
-              {clientes.map((c) => (
+              {opcoesCom(clientes, filtros.cliente).map((c) => (
                 <option key={c} value={c}>
                   {c.toUpperCase()}
                 </option>
@@ -396,7 +548,7 @@ export function Monitoramento() {
               onChange={(v) => alterarFiltro('plataforma', v)}
             >
               <option value="">Todas as plataformas</option>
-              {plataformas.map((p) => (
+              {opcoesCom(plataformas, filtros.plataforma).map((p) => (
                 <option key={p} value={p}>
                   {p}
                 </option>
@@ -409,10 +561,24 @@ export function Monitoramento() {
               value={filtros.erro}
               onChange={(v) => alterarFiltro('erro', v)}
             />
-            <BotaoLimpar onClick={() => setFiltros(FILTROS_VAZIOS)} disabled={!temFiltro} />
+            <BotaoLimpar onClick={limparFiltros} disabled={!temFiltro} />
           </div>
         }
-        rodape={semErros ? undefined : <RodapeContagem visiveis={visiveis} total={total} />}
+        rodape={
+          semErros ? undefined : ehPedidos ? (
+            <RodapeContagem visiveis={visiveis} total={total} />
+          ) : (
+            <RodapePaginacao
+              pagina={consulta.pagina}
+              tamanho={consulta.tamanho}
+              total={totalProdutos}
+              totalPaginas={totalPaginasProdutos}
+              naPagina={produtos.length}
+              onPagina={irParaPagina}
+              onTamanho={(tamanho) => alterarConsulta({ tamanho })}
+            />
+          )
+        }
       >
         {semErros ? (
           <EstadoVazio
@@ -428,7 +594,7 @@ export function Monitoramento() {
             acao={
               <button
                 type="button"
-                onClick={() => setFiltros(FILTROS_VAZIOS)}
+                onClick={limparFiltros}
                 className="text-sm font-medium text-brand-700 underline-offset-4 hover:text-brand-800 hover:underline"
               >
                 Limpar filtros
@@ -452,7 +618,7 @@ export function Monitoramento() {
                     <CelulaRotina texto={p.rotina?.toUpperCase() || 'Não Informado'} vazia={!p.rotina} />
                   </Linha>
                 ))
-              : produtosFiltrados.map((p) => {
+              : produtos.map((p) => {
                   const quando = formatarDataHora(p.dataErro)
                   return (
                     <Linha key={chaveProduto(p)}>
@@ -487,6 +653,119 @@ export function Monitoramento() {
 }
 
 /* ---------- Peças específicas do monitoramento ---------- */
+
+const CLASSE_BOTAO_PAGINA =
+  'inline-flex h-8 items-center justify-center rounded-lg border border-slate-200 bg-surface px-3 text-[13px] font-medium text-slate-700 shadow-soft transition-all duration-150 hover:border-slate-300 hover:bg-slate-50 active:scale-[0.97] disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:border-slate-200 disabled:hover:bg-surface disabled:active:scale-100'
+
+const formatarInteiro = (n: number) => n.toLocaleString('pt-BR')
+
+function RodapePaginacao({
+  pagina,
+  tamanho,
+  total,
+  totalPaginas,
+  naPagina,
+  onPagina,
+  onTamanho,
+}: {
+  pagina: number
+  tamanho: TamanhoPagina
+  total: number
+  totalPaginas: number
+  /** Quantos registros vieram na página atual. */
+  naPagina: number
+  onPagina: (pagina: number) => void
+  onTamanho: (tamanho: TamanhoPagina) => void
+}) {
+  const [destino, setDestino] = useState('')
+  // Com "todos" a página é sempre a 1: (pagina - 1) * 0 + 1.
+  const inicio = naPagina === 0 ? 0 : (pagina - 1) * tamanho + 1
+  const fim = naPagina === 0 ? 0 : inicio + naPagina - 1
+  const ultima = Math.max(totalPaginas, 1)
+
+  function ir() {
+    const numero = Number.parseInt(destino, 10)
+    if (Number.isFinite(numero)) {
+      onPagina(numero)
+    }
+    setDestino('')
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <p>
+        Exibindo{' '}
+        <strong className="font-semibold text-slate-700 tabular-nums">
+          {formatarInteiro(inicio)}–{formatarInteiro(fim)}
+        </strong>{' '}
+        de <strong className="font-semibold text-slate-700 tabular-nums">{formatarInteiro(total)}</strong> registros
+      </p>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="flex items-center gap-2">
+          <span>Por página</span>
+          <div className="w-24">
+            <SelectFiltro
+              aria-label="Registros por página"
+              value={String(tamanho)}
+              onChange={(v) => onTamanho(Number(v) as TamanhoPagina)}
+            >
+              {TAMANHOS_PAGINA.map((t) => (
+                <option key={t} value={t}>
+                  {rotuloTamanho(t)}
+                </option>
+              ))}
+            </SelectFiltro>
+          </div>
+        </label>
+
+        <div className="flex items-center gap-2">
+          <button type="button" className={CLASSE_BOTAO_PAGINA} disabled={pagina <= 1} onClick={() => onPagina(pagina - 1)}>
+            Anterior
+          </button>
+          <span className="tabular-nums">
+            Página <strong className="font-semibold text-slate-700">{formatarInteiro(pagina)}</strong> de{' '}
+            <strong className="font-semibold text-slate-700">{formatarInteiro(ultima)}</strong>
+          </span>
+          <button
+            type="button"
+            className={CLASSE_BOTAO_PAGINA}
+            disabled={pagina >= ultima}
+            onClick={() => onPagina(pagina + 1)}
+          >
+            Próxima
+          </button>
+        </div>
+
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            ir()
+          }}
+        >
+          <label className="flex items-center gap-2">
+            <span>Ir para</span>
+            <input
+              type="number"
+              min={1}
+              max={ultima}
+              inputMode="numeric"
+              aria-label="Ir para a página"
+              placeholder="nº"
+              value={destino}
+              onChange={(e) => setDestino(e.target.value)}
+              className="block h-8 w-20 rounded-lg border-slate-200 bg-surface text-[13px] shadow-soft focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15"
+            />
+          </label>
+          <button type="submit" className={CLASSE_BOTAO_PAGINA} disabled={destino === '' || ultima <= 1}>
+            Ir
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 function CartaoResumo({
   rotulo,

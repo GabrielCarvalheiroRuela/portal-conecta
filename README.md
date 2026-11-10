@@ -75,23 +75,31 @@ grep -c "gsi/client" dist/assets/*.js
 
 Tem que devolver `1`. Se devolver `0`, o bundle saiu sem o Google.
 
-## Perfil de usuário (admin e comum)
+## Perfil de usuário (USR, DEV e ADM)
 
-O usuário interno tem um perfil no `CADUSR` (`USR_PERFIL`: `ADMIN` ou `USUARIO`, padrão `USUARIO`). Quem é
-admin é dado do banco, marcado com `UPDATE` (script em `monitoramento-pedpen/sql/001_cadusr_perfil.sql`);
-o login pelo Google nunca promove nem rebaixa ninguém.
+O usuário interno tem um perfil no `CADUSR` (`USR_PERFIL`: `USR`, `DEV` ou `ADM`, padrão `USR`). O perfil é dado do
+banco, marcado com `UPDATE` (script em `monitoramento-pedpen/sql/004_perfis.sql`); o login pelo Google nunca
+promove nem rebaixa ninguém.
 
-- **API:** `POST /plataformas`, `POST /integracoes` e `GET /clientes` respondem **403** ao usuário interno
-  sem perfil ADMIN. Lojistas (o n8n) e admins passam como antes, e `POST /cadastro` continua aberto.
-- **Token:** o login devolve o claim `perfil`. A tela o lê em `ehAdmin()` (`src/services/api.ts`) e **esconde**
-  as abas **Plataformas**, **Nova integração** e **Workflows** de quem não é admin.
+| | USR | DEV | ADM |
+|---|---|---|---|
+| Monitoramento e Integrações (lista) | sim | sim | sim |
+| Plataformas | só a tabela das cadastradas | + cadastrar plataforma e a matriz de funcionalidades, marcando a situação (engrenagem) | tudo, inclusive criar, editar e excluir funcionalidade |
+| Nova integração | não | sim | sim |
+| Editar uma integração (engrenagem em Integrações) | não | não | sim |
+| Workflows | não | sim (exportar) | sim (exportar e importar) |
+
+- **API:** quem não tem o perfil recebe **403**. Lojistas (o n8n) passam como antes, e `POST /cadastro` continua aberto.
+- **Token:** o login devolve o claim `perfil`. A tela o lê em `perfilDaSessao()` e `temPerfil()`
+  (`src/services/api.ts`) e **esconde** o que o perfil não pode.
 - **Esconder não protege:** quem barra é a API (e o n8n, na aba Workflows). O token reflete o perfil do
   momento do login, então quem foi promovido precisa entrar de novo para ver as abas.
-- **Desenvolvimento:** `VITE_PERFIL_DEV=ADMIN` no `.env` mostra as abas de admin no `npm run dev`, só visualmente.
+- **Desenvolvimento:** `VITE_PERFIL_DEV=ADM` (ou `DEV`, ou `USR`) no `.env` força o perfil no `npm run dev`, só
+  visualmente. Deixe vazio para valer o perfil do token.
 
 ## Controle de acesso por recurso
 
-A aba **Workflows** exige, além de ser admin, estar na lista do n8n. Quem decide não é a tela:
+A aba **Workflows** exige, além de ser DEV ou ADM, o recurso liberado pelo n8n. Quem decide não é a tela:
 
 1. Ao entrar, o portal chama `GET /acesso` com o JWT do Monint.
 2. O nginx repassa ao webhook `portal-acesso` do n8n (workflow **Portal_Acesso**).

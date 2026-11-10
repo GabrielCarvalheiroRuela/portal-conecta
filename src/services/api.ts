@@ -72,20 +72,36 @@ export function usuarioDaSessao(): string | null {
   return claim<string>('sub')
 }
 
+/** USR é o padrão; DEV consulta o que é do time de desenvolvimento; ADM tem acesso completo (USR_PERFIL em CADUSR). */
+export type Perfil = 'USR' | 'DEV' | 'ADM'
+
+const NIVEL: Record<Perfil, number> = { USR: 0, DEV: 1, ADM: 2 }
+
 /**
- * Se o usuário interno é admin, lido do claim "perfil" do token (ADMIN ou USUARIO).
+ * O perfil do usuário interno, lido do claim "perfil" do token.
  *
  * Serve só para a tela decidir o que exibir: a API confere o perfil no banco a cada chamada e
  * responde 403 a quem não pode, então esconder a aba não protege nada sozinho. O token reflete o
  * perfil do momento do login; quem foi promovido precisa entrar de novo para ver as abas. Token sem
- * o claim (lojista ou emitido antes dele existir) conta como não-admin.
+ * o claim (lojista ou emitido antes dele existir) e qualquer valor desconhecido contam como USR: na dúvida,
+ * o menor acesso.
  *
- * No `npm run dev`, VITE_PERFIL_DEV=ADMIN força o resultado para dar para mexer nas telas.
+ * No `npm run dev`, VITE_PERFIL_DEV=ADM (ou DEV, ou USR) força o resultado para dar para mexer nas telas.
  */
-export function ehAdmin(): boolean {
+export function perfilDaSessao(): Perfil {
   const forcadoNoDev = import.meta.env.DEV ? import.meta.env.VITE_PERFIL_DEV : undefined
-  const perfil = forcadoNoDev || claim<string>('perfil')
-  return perfil?.trim().toUpperCase() === 'ADMIN'
+  const perfil = (forcadoNoDev || claim<string>('perfil'))?.trim().toUpperCase()
+  return perfil === 'ADM' || perfil === 'DEV' ? perfil : 'USR'
+}
+
+/** O perfil é pelo menos `minimo`: ADM vale como DEV, e DEV como USR. */
+export function temPerfil(minimo: Perfil): boolean {
+  return NIVEL[perfilDaSessao()] >= NIVEL[minimo]
+}
+
+/** Acesso completo: só o ADM cadastra, edita e exclui. */
+export function ehAdmin(): boolean {
+  return perfilDaSessao() === 'ADM'
 }
 
 export function sair() {
@@ -218,6 +234,19 @@ export function apiPost<T>(caminho: string, corpo: unknown, base?: string): Prom
     },
     base,
   )
+}
+
+/** Substituição: o corpo é o recurso inteiro, e o que ficar de fora o servidor limpa (ao contrário do PATCH). */
+export function apiPut<T>(caminho: string, corpo: unknown): Promise<T> {
+  return requisitar<T>(caminho, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpo),
+  })
+}
+
+export function apiDelete(caminho: string): Promise<void> {
+  return requisitar<void>(caminho, { method: 'DELETE' })
 }
 
 /**

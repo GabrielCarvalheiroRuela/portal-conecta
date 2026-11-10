@@ -28,6 +28,24 @@ export interface PedidoDoCliente {
   rotina?: string | null
 }
 
+/** Resposta do GET /produtos: uma página mais o total de todos os registros que atendem aos filtros. */
+export interface PaginaProdutos {
+  itens: ProdutoComErro[]
+  /** Começa em 1. */
+  pagina: number
+  tamanho: number
+  /** Contagem no banco, inclusive dos registros que não vieram nesta página. */
+  totalItens: number
+  /** 0 quando não há registros. */
+  totalPaginas: number
+}
+
+/** Resposta do GET /produtos/filtros: as opções dos filtros, só do que tem produto com erro. */
+export interface FiltrosProdutos {
+  clientes: string[]
+  plataformas: string[]
+}
+
 /** Item do GET /produtos — produtos que falharam na integração. */
 export interface ProdutoComErro {
   /** Único por registro. O codigoProduto se repete entre clientes, então não serve de chave. */

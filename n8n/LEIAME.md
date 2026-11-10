@@ -6,7 +6,7 @@ no n8n de produção; este arquivo existe aqui para ser revisado e instalado jun
 
 ## O que ele faz (e o que nunca faz)
 
-- Só aceita usuário **ADMIN** do Monint (o token vai a `/usuarios/me`, como no `Portal_WF_Exportar`). Dá para
+- Só aceita usuário **ADM** (perfil de acesso completo) do Monint (o token vai a `/usuarios/me`, como no `Portal_WF_Exportar`). Dá para
   limitar a e-mails específicos em `EMAILS_PERMITIDOS`, no node **Checar Permissao**.
 - Só escreve nas instâncias listadas em `INSTANCIAS` (mesmo node). Hoje: **Produção**, **Automaker 1**
   e **Automaker Dev Geral** (as mesmas do `Portal_WF_Exportar`, com os mesmos ids; a AutomakerDev CR não importa). A
@@ -34,11 +34,18 @@ no n8n de produção; este arquivo existe aqui para ser revisado e instalado jun
 4. Se quiser, limite quem importa em `EMAILS_PERMITIDOS` (no mesmo node). Como agora há escrita em **Produção**,
    vale restringir a poucos e-mails.
 5. **Publique** o workflow. O caminho do webhook é `portal-wf-importar` (POST).
-6. No **Portal_Acesso**, no node *Montar Resposta*, acrescente o recurso para quem é ADMIN:
+6. No **Portal_Acesso**, no node *Montar Resposta*, dê o recurso a quem tem o perfil certo. O perfil vem de
+   `GET /usuarios/me` e agora é `ADM`, `DEV` ou `USR` (antes era `ADMIN` ou `USUARIO`). Exportar é do DEV e do ADM;
+   importar, que escreve nas instâncias, é só do ADM:
 
    ```js
-   const recursos = admin ? ['workflows', 'workflows-importar'] : [];
+   const perfil = String(eu.perfil || '').trim().toUpperCase();
+   const recursos = perfil === 'ADM' ? ['workflows', 'workflows-importar']
+                  : perfil === 'DEV' ? ['workflows']
+                  : [];
    ```
+
+   O mesmo vale para a checagem do **Portal_WF_Exportar** (aceitar `ADM` e `DEV`).
 
 7. Publique o portal com o `nginx.conf` novo (o `location = /wf-importar` aceita corpo de até 20 MB).
 
@@ -75,7 +82,7 @@ JSON antes de enviar. Erros do pedido inteiro voltam como `{ error }` (400, 401 
 
 - **A aba Importar não aparece:** falta o recurso `workflows-importar` no Portal_Acesso (passo 6).
 - **"A importação não está liberada para o seu usuário…":** o webhook `portal-wf-importar` não está
-  publicado, o usuário não é ADMIN ou o e-mail não está em `EMAILS_PERMITIDOS`.
+  publicado, o usuário não é ADM ou o e-mail não está em `EMAILS_PERMITIDOS`.
 - **Um workflow volta com `HTTP 400 - request.body… additional property`:** a API do n8n recusou uma propriedade;
   a mensagem diz qual. Avise para ajustar a limpeza em `src/importacao/workflow.ts`.
 - **`HTTP 403` / `Forbidden` ao criar:** a chave não tem o escopo ou o usuário dela não escreve naquele projeto.
