@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 import { FormIntegracao } from './components/FormIntegracao'
-import { FormPlataforma } from './components/FormPlataforma'
 import { ListaIntegracoes } from './components/ListaIntegracoes'
-import { ListaPlataformas } from './components/ListaPlataformas'
+import { PaginaPlataformas } from './components/PaginaPlataformas'
 import { Monitoramento } from './components/Monitoramento'
 import { ErroNaTela } from './components/ui/ErroNaTela'
 import { PainelSucesso } from './components/PainelSucesso'
 import { TelaLogin } from './components/TelaLogin'
 import { PaginaWorkflows } from './components/PaginaWorkflows'
-import { ehAdmin, registrarExpiracao, sair, temSessao, usuarioDaSessao } from './services/api'
+import { perfilDaSessao, registrarExpiracao, sair, temPerfil, temSessao, usuarioDaSessao, type Perfil } from './services/api'
 import { carregarRecursos, type Recurso } from './services/acesso'
 import type { IntegracaoCriada } from './types/integracao'
 import { MenuUsuario } from './components/MenuUsuario'
@@ -18,15 +17,15 @@ import { IconeAtividade, IconeCamadas, IconeCaixa, IconeLink, IconeMais } from '
 
 type Aba = 'monitoramento' | 'integracao' | 'consulta' | 'plataformas' | 'workflows'
 
-// `somenteAdmin` esconde a aba de quem não tem o perfil ADMIN (USR_PERFIL, claim "perfil" do token).
-// `recurso` a restringe também à lista do n8n (veja services/acesso.ts). Esconder é só conforto: a API
-// e o n8n barram de verdade, com 403.
+// `perfilMinimo` esconde a aba de quem tem um perfil menor (USR < DEV < ADM; USR_PERFIL, claim "perfil" do token).
+// Sem ele, a aba é de todos. `recurso` a restringe também à lista do n8n (veja services/acesso.ts). Esconder é só
+// conforto: a API e o n8n barram de verdade, com 403.
 const ABAS: {
   id: Aba
   rotulo: string
   descricao: string
   Icone: () => JSX.Element
-  somenteAdmin?: boolean
+  perfilMinimo?: Perfil
   recurso?: Recurso
 }[] = [
   {
@@ -38,16 +37,15 @@ const ABAS: {
   {
     id: 'plataformas',
     rotulo: 'Plataformas',
-    descricao: 'Cadastre as plataformas que ficam disponíveis no seletor de Nova integração.',
+    descricao: 'Plataformas cadastradas e, para o time de desenvolvimento, o controle do que já foi feito em cada uma.',
     Icone: IconeCamadas,
-    somenteAdmin: true,
   },
   {
     id: 'integracao',
     rotulo: 'Nova integração',
     descricao: 'Vincule uma plataforma a um lojista do Monint. Um mesmo lojista pode ter várias integrações.',
     Icone: IconeMais,
-    somenteAdmin: true,
+    perfilMinimo: 'DEV',
   },
   {
     id: 'consulta',
@@ -60,7 +58,7 @@ const ABAS: {
     rotulo: 'Workflows',
     descricao: 'Exportação dos workflows do n8n por instância, categoria e plataforma. Restrito ao time de integrações.',
     Icone: IconeCaixa,
-    somenteAdmin: true,
+    perfilMinimo: 'DEV',
     recurso: 'workflows',
   },
 ]
@@ -70,7 +68,8 @@ const LARGURA: Record<Aba, string> = {
   monitoramento: 'max-w-none',
   consulta: 'max-w-none',
   integracao: 'max-w-5xl',
-  plataformas: 'max-w-6xl',
+  // Largura total: a matriz de funcionalidades tem tabela larga. O formulário de cadastro limita a própria largura.
+  plataformas: 'max-w-none',
   // Largura total: o explorador de workflows tem painel de pastas, lista e a lista de exportação lado a lado.
   workflows: 'max-w-none',
 }
@@ -136,9 +135,8 @@ export default function App() {
   }
 
   const usuario = usuarioDaSessao()
-  const admin = ehAdmin()
   const abasVisiveis = ABAS.filter(
-    (a) => (!a.somenteAdmin || admin) && (!a.recurso || recursos.includes(a.recurso)),
+    (a) => temPerfil(a.perfilMinimo ?? 'USR') && (!a.recurso || recursos.includes(a.recurso)),
   )
   const atual = abasVisiveis.find((a) => a.id === aba) ?? ABAS[0]
 
@@ -205,6 +203,12 @@ export default function App() {
         </nav>
 
         <div className="hidden space-y-1 border-t border-white/[0.06] p-3 lg:block">
+          {/* Só no npm run dev: avisa quando o perfil do token está sendo ignorado, para ninguém testar o USR vendo o ADM. */}
+          {import.meta.env.DEV && import.meta.env.VITE_PERFIL_DEV && (
+            <p className="px-3 pb-1 text-[11px] font-medium text-amber-400">
+              Dev: perfil forçado para {perfilDaSessao()} (VITE_PERFIL_DEV)
+            </p>
+          )}
           <AlternarTema escuroFixo comRotulo />
           <MenuUsuario usuario={usuario} aoSair={sairDoPortal} />
         </div>
@@ -231,8 +235,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Fica montado ao trocar de aba (não perde o que foi digitado), mas só para admin. */}
-              {admin && (
+              {/* Fica montado ao trocar de aba (não perde o que foi digitado), mas só para DEV e ADM. */}
+              {temPerfil('DEV') && (
                 <div hidden={aba !== 'integracao'} className="animate-fade-in">
                   {criada ? (
                     <PainelSucesso integracao={criada} aoCadastrarOutra={() => setCriada(null)} />
@@ -257,14 +261,18 @@ export default function App() {
                 </div>
               )}
 
-              {admin && aba === 'plataformas' && (
-                <div className="grid items-start gap-6 animate-fade-in lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-                  <FormPlataforma aoCriar={() => setVersaoPlataformas((v) => v + 1)} />
-                  <ListaPlataformas versao={versaoPlataformas} />
+              {/* Todo usuário interno vê a lista de plataformas; a matriz de funcionalidades é do DEV e do ADM, e só o ADM grava. */}
+              {aba === 'plataformas' && (
+                <div className="animate-fade-in">
+                  <PaginaPlataformas
+                    perfil={perfilDaSessao()}
+                    versaoPlataformas={versaoPlataformas}
+                    aoCriarPlataforma={() => setVersaoPlataformas((v) => v + 1)}
+                  />
                 </div>
               )}
 
-              {admin && aba === 'workflows' && recursos.includes('workflows') && (
+              {temPerfil('DEV') && aba === 'workflows' && recursos.includes('workflows') && (
                 <div className="animate-fade-in">
                   <PaginaWorkflows podeImportar={recursos.includes('workflows-importar')} />
                 </div>

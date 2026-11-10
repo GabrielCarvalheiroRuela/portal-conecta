@@ -24,6 +24,18 @@ export default defineConfig(({ mode }) => {
           secure: true,
           rewrite: (p) => p.replace(/^\/api/, ''),
         },
+        // Selo "MCP ativo": o /status do MCP rodando na máquina (npm start em mcp-funcionalidades, porta 3002).
+        '/mcp-status': {
+          target: env.VITE_MCP_TARGET || 'http://localhost:3002',
+          changeOrigin: true,
+          rewrite: () => '/status',
+        },
+        // Botão "Conectar MCP": o /conexao do mesmo MCP. O Authorization do portal segue (o MCP o confere na API).
+        '/mcp-conexao': {
+          target: env.VITE_MCP_TARGET || 'http://localhost:3002',
+          changeOrigin: true,
+          rewrite: () => '/conexao',
+        },
         '/acesso': {
           target: n8n,
           changeOrigin: true,

@@ -6,9 +6,11 @@ interface Props extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label: string
   erro?: string
   ajuda?: string
+  /** Fonte de código (padrão, para chaves e nomes de workflow). Falso para texto corrido, como descrições. */
+  mono?: boolean
 }
 
-export function Textarea({ id, label, erro, ajuda, ...props }: Props) {
+export function Textarea({ id, label, erro, ajuda, mono = true, ...props }: Props) {
   return (
     <div>
       <label htmlFor={id} className={CLASSE_ROTULO}>
@@ -18,7 +20,7 @@ export function Textarea({ id, label, erro, ajuda, ...props }: Props) {
         id={id}
         aria-invalid={erro ? true : undefined}
         aria-describedby={erro ? `${id}-erro` : ajuda ? `${id}-ajuda` : undefined}
-        className={`${classeControle(erro)} font-mono text-xs leading-relaxed`}
+        className={`${classeControle(erro)} ${mono ? 'font-mono text-xs' : 'text-sm'} leading-relaxed`}
         {...props}
       />
       <MensagemCampo id={id} erro={erro} ajuda={ajuda} />

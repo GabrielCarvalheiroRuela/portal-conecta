@@ -309,6 +309,8 @@ export interface ColunaTabela {
   className?: string
   ordenacao?: 'asc' | 'desc'
   onOrdenar?: () => void
+  /** Dica do botão de ordenar. Padrão: a das datas (mais antigos / mais recentes primeiro). */
+  dicaOrdenacao?: string
 }
 
 /** Tabela com cabeçalho fixo e rolagem interna. `arrastavel` deixa rolar puxando com o mouse. */
@@ -345,7 +347,10 @@ export function Tabela({
                   <button
                     type="button"
                     onClick={c.onOrdenar}
-                    title={c.ordenacao === 'asc' ? 'Mais antigos primeiro: clique para inverter' : 'Mais recentes primeiro: clique para inverter'}
+                    title={
+                      c.dicaOrdenacao ??
+                      (c.ordenacao === 'asc' ? 'Mais antigos primeiro: clique para inverter' : 'Mais recentes primeiro: clique para inverter')
+                    }
                     className="inline-flex items-center gap-1 uppercase tracking-[0.06em] text-slate-700 transition-colors hover:text-brand-700"
                   >
                     {c.rotulo}
