@@ -52,7 +52,7 @@ export function PainelSucesso({ integracao, aoCadastrarOutra }: Props) {
             <span className="font-mono text-[13px] text-slate-900">{integracao.slug}</span>
           </Dado>
           <Dado rotulo="Situação">
-            <EtiquetaSituacao ativo={integracao.ativo} />
+            <EtiquetaSituacao situacao={integracao.ativo ? 'S' : 'N'} />
           </Dado>
         </dl>
 

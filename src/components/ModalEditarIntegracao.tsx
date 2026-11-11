@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ApiError, apiGet, apiPatch } from '../services/api'
-import type { DadosEdicaoIntegracao, IntegracaoEdicao, IntegracaoResumo } from '../types/integracao'
+import { ApiError, apiGet, apiPatch, ehAdmin, temPerfil } from '../services/api'
+import {
+  SITUACOES,
+  type DadosEdicaoIntegracao,
+  type DadosSituacaoIntegracao,
+  type IntegracaoEdicao,
+  type IntegracaoResumo,
+  type SituacaoIntegracao,
+} from '../types/integracao'
+import { BotaoSituacao } from './BotaoSituacao'
 import { Alerta } from './ui/Alerta'
 import { Botao } from './ui/Botao'
 import { Campo } from './ui/Campo'
@@ -9,11 +17,11 @@ import { IconeEngrenagem, IconeX } from './ui/Icones'
 import { Textarea } from './ui/Textarea'
 
 interface Props {
-  /** A linha da lista em que a engrenagem foi clicada. Só a identidade é usada: o resto vem da API. */
+  /** A linha da lista em que a engrenagem foi clicada: identidade e situação atual. O resto, só o ADM, vem da API. */
   integracao: IntegracaoResumo
   aoFechar: () => void
-  /** Chamado depois do PATCH, com os rótulos dos campos que mudaram. */
-  aoSalvar: (atualizada: IntegracaoEdicao, camposAlterados: string[]) => void
+  /** Chamado depois de salvar, com a linha da lista e os rótulos do que mudou. */
+  aoSalvar: (integracao: IntegracaoResumo, camposAlterados: string[]) => void
 }
 
 interface Formulario {
@@ -79,15 +87,18 @@ function validar(original: Formulario, atual: Formulario): Erros {
   return erros
 }
 
+const ROTULO_RESUMO_SITUACAO = 'situação'
+
 const FOCAVEIS =
   'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 /**
- * Popup de edição de uma integração, aberto pela engrenagem da lista. Só admin chega aqui: o botão
- * some para os demais e a API responde 403 a quem tentar pelo Swagger.
+ * Popup de configuração de uma integração, aberto pela engrenagem da lista, para qualquer usuário.
  *
- * Só webservice, URL da API e chave privada são editáveis; o resto aparece travado. O PATCH leva
- * apenas o que mudou, e a API registra cada campo alterado no LOGINT.
+ * Todos alteram a situação pelo botão colorido do cabeçalho (ATIVO, INATIVO, EM DESENVOLVIMENTO). O USR só alterna
+ * entre ATIVO e INATIVO; DEV e ADM também usam EM DESENVOLVIMENTO. Webservice, URL da API e chave privada são só do ADM:
+ * para os demais perfis esses campos nem aparecem, e a chave privada nem é carregada. A API confere o perfil de novo
+ * (403) e registra cada alteração no LOGINT. Só o que mudou vai para a API.
  */
 export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props) {
   const [dados, setDados] = useState<IntegracaoEdicao | null>(null)
@@ -96,15 +107,33 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
   const [erros, setErros] = useState<Erros>({})
   const [erroApi, setErroApi] = useState<string | null>(null)
   const [enviando, setEnviando] = useState(false)
+  const [situacao, setSituacao] = useState<SituacaoIntegracao>(integracao.situacao)
+  /** A situação que está gravada: muda quando o PATCH dela passa. */
+  const [situacaoGravada, setSituacaoGravada] = useState<SituacaoIntegracao>(integracao.situacao)
 
   const dialogo = useRef<HTMLDivElement>(null)
 
+  // Esconder o que não é do perfil é conforto: a API responde 403 a quem tentar a rota por fora.
+  const admin = ehAdmin()
+  const podeEmDesenvolvimento = temPerfil('DEV')
+
   const original = useMemo(() => (dados ? formularioDe(dados) : null), [dados])
   const alterados = useMemo(() => (original && form ? camposAlterados(original, form) : []), [original, form])
-  const temAlteracao = alterados.length > 0
+  // O USR só alterna entre ATIVO e INATIVO: não vê EM DESENVOLVIMENTO e, se a integração já está nela, o botão só exibe.
+  const situacaoTravada = !podeEmDesenvolvimento && situacaoGravada === 'D'
+  const opcoesSituacao = SITUACOES.filter((codigo) => codigo !== 'D' || podeEmDesenvolvimento)
+  const mudouSituacao = situacao !== situacaoGravada
+  const temAlteracao = alterados.length > 0 || mudouSituacao
+  const rotulosAlterados = [
+    ...(mudouSituacao ? [ROTULO_RESUMO_SITUACAO] : []),
+    ...alterados.map((campo) => ROTULOS[campo]),
+  ]
 
-  // Carrega os dados atuais, com a chave privada, direto da rota de admin.
+  // Só o ADM carrega os dados de edição, com a chave privada, pela rota de admin.
   useEffect(() => {
+    if (!admin) {
+      return
+    }
     let cancelado = false
     apiGet<IntegracaoEdicao>(`/integracoes/${encodeURIComponent(integracao.codigoIntegracao)}/${integracao.codigoCliente}`)
       .then((resposta) => {
@@ -113,6 +142,8 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
         }
         setDados(resposta)
         setForm(formularioDe(resposta))
+        setSituacao(resposta.situacao)
+        setSituacaoGravada(resposta.situacao)
       })
       .catch((e: unknown) => {
         if (!cancelado) {
@@ -122,7 +153,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
     return () => {
       cancelado = true
     }
-  }, [integracao.codigoIntegracao, integracao.codigoCliente])
+  }, [admin, integracao.codigoIntegracao, integracao.codigoCliente])
 
   // Trava a rolagem da página por baixo e devolve o foco ao botão que abriu o popup.
   useEffect(() => {
@@ -136,13 +167,13 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
     }
   }, [])
 
-  // Quando os dados chegam, o cursor vai para o primeiro campo editável.
-  const carregado = form !== null
+  // Quando os dados chegam, o cursor vai para o que o perfil edita: o primeiro campo (ADM) ou o botão de situação.
+  const carregado = !admin || form !== null
   useEffect(() => {
     if (carregado) {
-      document.getElementById('editUrlWebservice')?.focus()
+      document.getElementById(admin ? 'editUrlWebservice' : 'botaoSituacao')?.focus()
     }
-  }, [carregado])
+  }, [carregado, admin])
 
   /** Esc e clique no fundo só fecham se nada foi digitado: uma chave colada não se perde sem querer. */
   function fecharSeLimpo() {
@@ -184,40 +215,50 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
 
   async function salvar(evento: FormEvent) {
     evento.preventDefault()
-    if (!original || !form || !temAlteracao || enviando) {
+    if (!temAlteracao || enviando) {
       return
     }
 
-    const encontrados = validar(original, form)
-    if (Object.keys(encontrados).length > 0) {
-      setErros(encontrados)
-      return
+    if (original && form) {
+      const encontrados = validar(original, form)
+      if (Object.keys(encontrados).length > 0) {
+        setErros(encontrados)
+        return
+      }
     }
 
-    // Só o que mudou: o que ficar de fora o servidor preserva, e nada de log para o que não mudou.
-    const corpo: DadosEdicaoIntegracao = {}
-    for (const campo of alterados) {
-      corpo[campo] = campo === 'chavePrivada' ? form[campo] : form[campo].trim()
-    }
+    const caminho = `/integracoes/${encodeURIComponent(integracao.codigoIntegracao)}/${integracao.codigoCliente}`
+    const resumo = rotulosAlterados
 
     setEnviando(true)
     setErroApi(null)
     try {
-      const atualizada = await apiPatch<IntegracaoEdicao>(
-        `/integracoes/${encodeURIComponent(integracao.codigoIntegracao)}/${integracao.codigoCliente}`,
-        corpo,
-      )
-      aoSalvar(
-        atualizada,
-        alterados.map((campo) => ROTULOS[campo]),
-      )
+      // Só o que mudou: o que ficar de fora o servidor preserva, e nada de log para o que não mudou.
+      if (form && alterados.length > 0) {
+        const corpo: DadosEdicaoIntegracao = {}
+        for (const campo of alterados) {
+          corpo[campo] = campo === 'chavePrivada' ? form[campo] : form[campo].trim()
+        }
+        const atualizada = await apiPatch<IntegracaoEdicao>(caminho, corpo)
+        // Se a situação falhar logo a seguir, estes campos já estão gravados e não voltam a contar como alterados.
+        setDados(atualizada)
+        setForm(formularioDe(atualizada))
+      }
+
+      if (mudouSituacao) {
+        const corpo: DadosSituacaoIntegracao = { situacao }
+        await apiPatch<IntegracaoResumo>(`${caminho}/situacao`, corpo)
+        setSituacaoGravada(situacao)
+      }
+
+      aoSalvar(integracao, resumo)
     } catch (e) {
       setErroApi(e instanceof ApiError ? e.message : 'Não foi possível salvar. Tente novamente.')
       setEnviando(false)
     }
   }
 
-  const titulo = `Editar integração ${integracao.codigoIntegracao}`
+  const titulo = `Editar configuração da integração ${integracao.codigoIntegracao}`
 
   // No <body>, por um portal: as páginas animam a entrada com transform, e um fixed dentro delas
   // ficaria preso ao container em vez de cobrir a tela.
@@ -240,7 +281,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
         className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-surface shadow-card-hover outline-none animate-fade-in"
       >
         <header className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 ring-1 ring-inset ring-brand-600/10">
               <span className="h-[18px] w-[18px]">
                 <IconeEngrenagem />
@@ -255,17 +296,33 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={aoFechar}
-            disabled={enviando}
-            aria-label="Fechar"
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="h-4 w-4">
-              <IconeX />
-            </span>
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Só depois da carga: para o ADM a situação gravada vem junto com os dados de edição. */}
+            {carregado && !erroCarga && (
+              <BotaoSituacao
+                situacao={situacao}
+                opcoes={opcoesSituacao}
+                travado={situacaoTravada}
+                desabilitado={enviando}
+                alterada={mudouSituacao}
+                aoEscolher={(nova) => {
+                  setSituacao(nova)
+                  setErroApi(null)
+                }}
+              />
+            )}
+            <button
+              type="button"
+              onClick={aoFechar}
+              disabled={enviando}
+              aria-label="Fechar"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="h-4 w-4">
+                <IconeX />
+              </span>
+            </button>
+          </div>
         </header>
 
         {erroCarga ? (
@@ -279,7 +336,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
               </Botao>
             </div>
           </div>
-        ) : !dados || !form ? (
+        ) : admin && (!dados || !form) ? (
           <div className="flex items-center gap-2 px-5 py-10 text-[13px] font-medium text-slate-500" aria-busy="true">
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
             Carregando integração…
@@ -295,50 +352,53 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
                   </span>
                 </h3>
                 <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Campo id="editLojista" label="Lojista" value={`${dados.nomeCliente} (#${dados.codigoCliente})`} disabled readOnly />
-                  <Campo id="editCodigo" label="Código da integração" value={dados.codigoIntegracao} disabled readOnly />
-                  <Campo id="editPlataforma" label="Plataforma" value={dados.plataforma} disabled readOnly />
-                  <Campo id="editSlug" label="Slug" value={dados.slug} disabled readOnly />
+                  <Campo id="editLojista" label="Lojista" value={`${integracao.nomeCliente} (#${integracao.codigoCliente})`} disabled readOnly />
+                  <Campo id="editCodigo" label="Código da integração" value={integracao.codigoIntegracao} disabled readOnly />
+                  <Campo id="editPlataforma" label="Plataforma" value={integracao.plataforma} disabled readOnly />
+                  <Campo id="editSlug" label="Slug" value={integracao.slug} disabled readOnly />
                 </div>
               </section>
 
-              <section aria-labelledby="secaoEdicao" className="space-y-4">
-                <h3 id="secaoEdicao" className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
-                  Pode ser alterado
-                </h3>
-                <Campo
-                  id="editUrlWebservice"
-                  label="URL do webservice do ERP"
-                  value={form.urlWebservice}
-                  onChange={(e) => alterar('urlWebservice', e.target.value)}
-                  erro={erros.urlWebservice}
-                  disabled={enviando}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <Campo
-                  id="editUrlApi"
-                  label="URL da API da plataforma"
-                  value={form.urlApi}
-                  onChange={(e) => alterar('urlApi', e.target.value)}
-                  erro={erros.urlApi}
-                  disabled={enviando}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <Textarea
-                  id="editChavePrivada"
-                  label="Chave privada (PEM)"
-                  rows={8}
-                  value={form.chavePrivada}
-                  onChange={(e) => alterar('chavePrivada', e.target.value)}
-                  erro={erros.chavePrivada}
-                  ajuda="Cole exatamente como está no arquivo .pem, sem reformatar."
-                  disabled={enviando}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </section>
+              {/* A situação não está aqui: é o botão colorido do cabeçalho. Estes campos são só do ADM. */}
+              {admin && form && (
+                <section aria-labelledby="secaoEdicao" className="space-y-4">
+                  <h3 id="secaoEdicao" className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+                    Pode ser alterado
+                  </h3>
+                  <Campo
+                    id="editUrlWebservice"
+                    label="URL do webservice do ERP"
+                    value={form.urlWebservice}
+                    onChange={(e) => alterar('urlWebservice', e.target.value)}
+                    erro={erros.urlWebservice}
+                    disabled={enviando}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <Campo
+                    id="editUrlApi"
+                    label="URL da API da plataforma"
+                    value={form.urlApi}
+                    onChange={(e) => alterar('urlApi', e.target.value)}
+                    erro={erros.urlApi}
+                    disabled={enviando}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <Textarea
+                    id="editChavePrivada"
+                    label="Chave privada (PEM)"
+                    rows={8}
+                    value={form.chavePrivada}
+                    onChange={(e) => alterar('chavePrivada', e.target.value)}
+                    erro={erros.chavePrivada}
+                    ajuda="Cole exatamente como está no arquivo .pem, sem reformatar."
+                    disabled={enviando}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </section>
+              )}
             </div>
 
             {/* Fora da área rolável: com o popup alto, um erro no fim dela ficaria abaixo da dobra. */}
@@ -353,7 +413,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
             <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/60 px-5 py-3">
               <p className="text-[13px] text-slate-500" aria-live="polite">
                 {temAlteracao
-                  ? `Vai alterar: ${alterados.map((c) => ROTULOS[c]).join(', ')}.`
+                  ? `Vai alterar: ${rotulosAlterados.join(', ')}.`
                   : 'Nenhuma alteração ainda.'}
               </p>
               <div className="flex gap-2">

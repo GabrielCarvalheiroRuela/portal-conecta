@@ -6,6 +6,7 @@ import type {
   ReactNode,
   SelectHTMLAttributes,
 } from 'react'
+import { ROTULO_SITUACAO, type SituacaoIntegracao } from '../../types/integracao'
 import { IconeAtualizar, IconeLupa, IconeX } from './Icones'
 
 /*
@@ -96,17 +97,33 @@ export function EtiquetaPlataforma({ nome }: { nome?: string | null }) {
   )
 }
 
-export function EtiquetaSituacao({ ativo }: { ativo: boolean }) {
+/** Cores de cada situação da integração: a etiqueta da lista e o botão do popup usam as mesmas. */
+export const TOM_SITUACAO: Record<SituacaoIntegracao, { chip: string; ponto: string; hover: string }> = {
+  S: {
+    chip: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+    ponto: 'bg-emerald-500',
+    hover: 'hover:bg-emerald-100 hover:ring-emerald-600/40',
+  },
+  N: {
+    chip: 'bg-slate-100 text-slate-600 ring-slate-500/20',
+    ponto: 'bg-slate-400',
+    hover: 'hover:bg-slate-200/70 hover:ring-slate-500/40',
+  },
+  D: {
+    chip: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+    ponto: 'bg-amber-500',
+    hover: 'hover:bg-amber-100 hover:ring-amber-600/40',
+  },
+}
+
+export function EtiquetaSituacao({ situacao }: { situacao: SituacaoIntegracao }) {
+  const tom = TOM_SITUACAO[situacao]
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
-        ativo
-          ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
-          : 'bg-slate-100 text-slate-600 ring-slate-500/20'
-      }`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tom.chip}`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${ativo ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-      {ativo ? 'Ativa' : 'Inativa'}
+      <span className={`h-1.5 w-1.5 rounded-full ${tom.ponto}`} />
+      {ROTULO_SITUACAO[situacao]}
     </span>
   )
 }

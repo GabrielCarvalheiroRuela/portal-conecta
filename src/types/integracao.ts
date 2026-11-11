@@ -3,6 +3,21 @@
 /** Sistema externo de uma plataforma cadastrada em CADPLA (ver PlataformaResumo). */
 export type Plataforma = string
 
+/**
+ * Situação de uma integração (CADINT.INT_ATIVO_): S ativo, N inativo, D em desenvolvimento. O código só trafega
+ * entre a tela e a API — quem lê a tela vê sempre o rótulo, nunca a sigla.
+ */
+export type SituacaoIntegracao = 'S' | 'N' | 'D'
+
+export const ROTULO_SITUACAO: Record<SituacaoIntegracao, string> = {
+  S: 'ATIVO',
+  N: 'INATIVO',
+  D: 'EM DESENVOLVIMENTO',
+}
+
+/** Ordem em que as situações aparecem nos seletores. */
+export const SITUACOES: SituacaoIntegracao[] = ['S', 'N', 'D']
+
 /** Item do GET /clientes. */
 export interface ClienteResumo {
   codigoCliente: number
@@ -43,6 +58,7 @@ export interface IntegracaoResumo {
   plataforma: string
   slug: string
   ativo: boolean
+  situacao: SituacaoIntegracao
   urlApi: string | null
   urlWebservice: string
   dataInclusao: string | null
@@ -93,9 +109,15 @@ export interface IntegracaoEdicao {
   plataforma: string
   slug: string
   ativo: boolean
+  situacao: SituacaoIntegracao
   urlWebservice: string
   urlApi: string | null
   chavePrivada: string
+}
+
+/** Corpo do PATCH /integracoes/{codigoIntegracao}/{codigoCliente}/situacao. */
+export interface DadosSituacaoIntegracao {
+  situacao: SituacaoIntegracao
 }
 
 /** Corpo do PATCH: só o que mudou. Campo ausente preserva o valor atual. */
