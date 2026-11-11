@@ -86,12 +86,17 @@ promove nem rebaixa ninguém.
 | Monitoramento e Integrações (lista) | sim | sim | sim |
 | Plataformas | só a tabela das cadastradas | + cadastrar plataforma e a matriz de funcionalidades, marcando a situação (engrenagem) | tudo, inclusive criar, editar e excluir funcionalidade |
 | Nova integração | não | sim | sim |
-| Editar uma integração (engrenagem em Integrações) | não | não | sim |
+| Situação da integração (botão no popup da engrenagem em Integrações) | ATIVO e INATIVO (não mexe numa integração em desenvolvimento) | ATIVO, INATIVO e EM DESENVOLVIMENTO | ATIVO, INATIVO e EM DESENVOLVIMENTO |
+| Editar webservice, URL da API e chave privada (popup da engrenagem) | não | não | sim |
 | Workflows | não | sim (exportar) | sim (exportar e importar) |
 
 - **API:** quem não tem o perfil recebe **403**. Lojistas (o n8n) passam como antes, e `POST /cadastro` continua aberto.
 - **Token:** o login devolve o claim `perfil`. A tela o lê em `perfilDaSessao()` e `temPerfil()`
   (`src/services/api.ts`) e **esconde** o que o perfil não pode.
+- **Situação da integração:** a lista só **exibe** a situação; quem altera é o popup da engrenagem, aberto por qualquer
+  usuário. A tela mostra só o rótulo (ATIVO, INATIVO, EM DESENVOLVIMENTO), nunca a sigla S/N/D. A API
+  (`PATCH /integracoes/{codigo}/{lojista}/situacao`) responde 403 ao `USR` que pede `D` ou mexe numa integração em `D`, e
+  cada mudança vira uma linha no `LOGINT` com os rótulos. Só a integração **ATIVA** responde ao n8n.
 - **Esconder não protege:** quem barra é a API (e o n8n, na aba Workflows). O token reflete o perfil do
   momento do login, então quem foi promovido precisa entrar de novo para ver as abas.
 - **Desenvolvimento:** `VITE_PERFIL_DEV=ADM` (ou `DEV`, ou `USR`) no `.env` força o perfil no `npm run dev`, só

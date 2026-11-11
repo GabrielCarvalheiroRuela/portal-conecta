@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, apiGet, ehAdmin } from '../services/api'
-import type { IntegracaoEdicao, IntegracaoResumo, PlataformaResumo } from '../types/integracao'
+import { ApiError, apiGet } from '../services/api'
+import { ROTULO_SITUACAO, SITUACOES, type IntegracaoResumo, type PlataformaResumo } from '../types/integracao'
 import { ModalEditarIntegracao } from './ModalEditarIntegracao'
 import { PedidosDoCliente } from './PedidosDoCliente'
 import { Alerta } from './ui/Alerta'
@@ -47,9 +47,8 @@ function normalizar(texto: string): string {
 }
 
 /**
- * Consulta das integrações cadastradas, com a edição de webservice, URL da API e chave privada para
- * admin (engrenagem em cada linha, que abre um popup). A desativação ainda não existe na API — hoje
- * isso é UPDATE direto no banco.
+ * Consulta das integrações cadastradas. A situação (ATIVO, INATIVO, EM DESENVOLVIMENTO) é só exibição aqui: quem altera
+ * é o popup da engrenagem, aberto por qualquer usuário (ver ModalEditarIntegracao, que decide o que cada perfil edita).
  *
  * A lista usa o GET /integracoes sem incluirCredenciais, então nenhum segredo trafega até aqui: a
  * chave privada só chega ao popup, pela rota de admin. Plataforma e situação filtram na API; a busca
@@ -68,9 +67,6 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
   /** Integração cujo popup de edição está aberto. */
   const [emEdicao, setEmEdicao] = useState<IntegracaoResumo | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
-
-  // O botão some para quem não é admin; a API recusa com 403 quem tentar a rota por fora.
-  const admin = ehAdmin()
 
   // O filtro de plataforma segue o cadastro (aba Plataformas). Se a consulta falhar, ficam as duas
   // que a tela sempre ofereceu.
@@ -145,10 +141,10 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
     )
   }
 
-  function aoSalvarEdicao(atualizada: IntegracaoEdicao, camposAlterados: string[]) {
+  function aoSalvarEdicao(editada: IntegracaoResumo, camposAlterados: string[]) {
     setEmEdicao(null)
     setAviso(
-      `Integração ${atualizada.codigoIntegracao} (${atualizada.nomeCliente}) atualizada: ${camposAlterados.join(', ')}.`,
+      `Integração ${editada.codigoIntegracao} (${editada.nomeCliente}) atualizada: ${camposAlterados.join(', ')}.`,
     )
     carregar()
   }
@@ -195,8 +191,11 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
           </SelectFiltro>
           <SelectFiltro id="filtroAtivo" aria-label="Situação" value={ativo} onChange={setAtivo}>
             <option value="">Todas as situações</option>
-            <option value="S">Ativas</option>
-            <option value="N">Inativas</option>
+            {SITUACOES.map((codigo) => (
+              <option key={codigo} value={codigo}>
+                {ROTULO_SITUACAO[codigo]}
+              </option>
+            ))}
           </SelectFiltro>
           <BotaoLimpar onClick={limpar} disabled={!temFiltro} />
         </div>
@@ -251,7 +250,7 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
               { rotulo: 'Plataforma' },
               { rotulo: 'Situação' },
               { rotulo: 'Cadastrada em' },
-              ...(admin ? [{ rotulo: 'Ações' }] : []),
+              { rotulo: 'Ações' },
             ]}
           >
             {visiveis.map((i) => {
@@ -279,9 +278,9 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
                     <EtiquetaPlataforma nome={i.plataforma} />
                   </Celula>
                   <Celula className="whitespace-nowrap">
-                    <EtiquetaSituacao ativo={i.ativo} />
+                    <EtiquetaSituacao situacao={i.situacao} />
                   </Celula>
-                  <Celula ultima={!admin} className="whitespace-nowrap tabular-nums">
+                  <Celula className="whitespace-nowrap tabular-nums">
                     {quando ? (
                       <>
                         <div className="text-slate-700">{quando.data}</div>
@@ -291,21 +290,19 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
                       <span className="text-slate-400">—</span>
                     )}
                   </Celula>
-                  {admin && (
-                    <Celula ultima className="whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => setEmEdicao(i)}
-                        title={`Editar a integração ${i.codigoIntegracao}`}
-                        aria-label={`Editar a integração ${i.codigoIntegracao} de ${i.nomeCliente}`}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-all duration-150 hover:bg-slate-100 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/25 active:scale-95"
-                      >
-                        <span className="h-4 w-4">
-                          <IconeEngrenagem />
-                        </span>
-                      </button>
-                    </Celula>
-                  )}
+                  <Celula ultima className="whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => setEmEdicao(i)}
+                      title={`Editar a configuração da integração ${i.codigoIntegracao}`}
+                      aria-label={`Editar a configuração da integração ${i.codigoIntegracao} de ${i.nomeCliente}`}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-all duration-150 hover:bg-slate-100 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/25 active:scale-95"
+                    >
+                      <span className="h-4 w-4">
+                        <IconeEngrenagem />
+                      </span>
+                    </button>
+                  </Celula>
                 </Linha>
               )
             })}
