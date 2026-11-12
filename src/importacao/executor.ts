@@ -1,19 +1,21 @@
-import type { ClienteImportacao, PastaParaCriar, ResultadoItem, WorkflowParaAtualizar, WorkflowParaEnviar } from './cliente'
+import type { ClienteImportacao, PastaParaCriar, ResultadoItem, WorkflowParaAtualizar, WorkflowParaEnviar, WorkflowParaPublicar } from './cliente'
 import type { WorkflowOrigem } from './origem'
 import { dividirEmLotes, type OpcoesImportacao, type Plano } from './plano'
-import { limparParaCriar, remapearReferencias } from './workflow'
+import { herdarCredenciais, idsDeChamadaFixos, limparParaCriar, listarChamadasDosNodes, remapearReferencias, type Json } from './workflow'
 
 /**
- * Executa o plano na instância, em três etapas e sempre em pedidos pequenos:
+ * Executa o plano na instância, em etapas e sempre em pedidos pequenos:
  *   1. pastas, nível a nível (uma pasta só pode ser criada depois da mãe);
- *   2. workflows, em lotes, já dentro das pastas;
- *   3. referências: como o n8n dá IDs novos, os workflows que chamam outros são reescritos com os IDs novos.
+ *   2. workflows, em lotes, já dentro das pastas: os novos são criados e, na política “Substituir”, os que já
+ *      existem são sobrescritos mantendo o ID (com as credenciais que o destino já usava);
+ *   3. referências: como o n8n dá IDs novos, os workflows que chamam outros são reescritos com os IDs novos, e as
+ *      chamadas a workflows de fora da seleção apontam para o mesmo workflow achado no destino pelo nome;
+ *   4. conferência das chamadas e republicação dos substituídos que já estavam publicados, de baixo para cima.
  *
- * Nada é sobrescrito: o plano só tem o que é novo. Se algo falhar, o que já foi criado fica, e rodar de novo com
- * "pular os que já existem" continua de onde parou.
+ * Só sobrescreve quando a pessoa escolhe “Substituir”; o resto só cria.
  */
 
-export type FaseImportacao = 'pastas' | 'workflows' | 'referencias' | 'fim'
+export type FaseImportacao = 'pastas' | 'workflows' | 'referencias' | 'publicacao' | 'fim'
 
 export interface ProgressoImportacao {
   fase: FaseImportacao
@@ -24,12 +26,22 @@ export interface ProgressoImportacao {
 
 export interface ResultadoImportacao {
   criados: { chave: string; nome: string; id: string }[]
+  substituidos: {chave: string; nome: string; id: string}[]
   pulados: { chave: string; nome: string; motivo: string }[]
   falhas: { chave: string; nome: string; erro: string }[]
   pastasCriadas: number
   pastasComFalha: { chave: string; erro: string }[]
   referenciasAtualizadas: number
   referenciasComFalha: { chave: string; nome: string; erro: string }[]
+  /** Chamadas a um ID que não existe no destino depois da importação (ficaram quebradas). */
+  chamadasQuebradas: { chave: string; nome: string; id: string; chamado: string | null }[]
+  /** Substituídos que já estavam publicados e foram publicados de novo. */
+  publicados: { chave: string; nome: string; id: string }[]
+  publicacaoComFalha: { chave: string; nome: string; erro: string }[]
+  /** Quantas credenciais dos workflows substituídos voltaram a ser as que o destino já usava. */
+  credenciaisMantidas: number
+  /** Avisos do próprio processo (ex.: não consegui ler os workflows que seriam substituídos). */
+  avisos: string[]
   cancelado: boolean
 }
 
@@ -45,6 +57,8 @@ export interface ArgumentosExecucao {
   cliente: ClienteImportacao
   aoProgresso: (progresso: ProgressoImportacao) => void
   sinal?: AbortSignal
+  /** IDs de todos os workflows que já existiam no destino: com eles dá para conferir se sobrou chamada quebrada. */
+  idsExistentes?: ReadonlySet<string>
 }
 
 const mensagem = (erro: unknown) => (erro instanceof Error ? erro.message : String(erro))
@@ -56,10 +70,11 @@ function casar(itens: { chave: string }[], resultados: ResultadoItem[]): Resulta
 }
 
 export async function executarImportacao(args: ArgumentosExecucao): Promise<ResultadoImportacao> {
-  const { instancia, plano, selecionados, opcoes, cliente, aoProgresso, sinal } = args
+  const { instancia, plano, selecionados, opcoes, cliente, aoProgresso, sinal, idsExistentes } = args
   const porChave = new Map(selecionados.map((s) => [s.chave, s]))
   const resultado: ResultadoImportacao = {
     criados: [],
+    substituidos: [],
     pulados: plano.itens
       .filter((i) => i.acao === 'pular')
       .map((i) => ({ chave: i.chave, nome: i.nome, motivo: i.motivo ?? 'já existe' })),
@@ -68,6 +83,11 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
     pastasComFalha: [],
     referenciasAtualizadas: 0,
     referenciasComFalha: [],
+    chamadasQuebradas: [],
+    publicados: [],
+    publicacaoComFalha: [],
+    credenciaisMantidas: 0,
+    avisos: [],
     cancelado: false,
   }
 
@@ -129,9 +149,10 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
 
   // 2) workflows
   const criar = plano.itens.filter((i) => i.acao === 'criar')
+  const substituir = plano.itens.filter((i) => i.acao === 'substituir')
   const novoId = new Map<string, string>() // chave do arquivo -> ID novo
   const paraEnviar: (WorkflowParaEnviar & { nomeFinal: string })[] = []
-
+  const paraSubstituir: (WorkflowParaAtualizar & { nome: string })[] = []
   for (const item of criar) {
     const origem = porChave.get(item.chave)
     if (!origem) {
@@ -147,6 +168,47 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
       pastaId: item.pastaChave ? (idPasta.get(item.pastaChave) ?? null) : item.pastaExistenteId,
       workflow: limparParaCriar(origem.json, item.nomeFinal),
     })
+  }
+
+  // O que já existe no destino: dele vêm as credenciais a manter e a informação de estar publicado.
+  const existentePorChave = new Map<string, Json>()
+  if (substituir.length > 0 && cliente.lerExistentes && !cancelado()) {
+    aoProgresso({ fase: 'workflows', feitos: 0, total: substituir.length, texto: 'Lendo os workflows que serão substituídos…' })
+    try {
+      const lidos = await cliente.lerExistentes(instancia, substituir.map((i) => i.idExistente as string))
+      for (const item of substituir) {
+        const atual = lidos.get(item.idExistente as string)
+        if (atual) {
+          existentePorChave.set(item.chave, atual)
+        }
+      }
+      const faltou = substituir.length - existentePorChave.size
+      if (faltou > 0) {
+        resultado.avisos.push(
+          `Não consegui ler ${faltou} dos workflows que seriam substituídos: neles as credenciais voltam às da origem e não dá para saber se estavam publicados.`,
+        )
+      }
+    } catch (erro) {
+      resultado.avisos.push(
+        `Não consegui ler os workflows que seriam substituídos (${mensagem(erro)}): as credenciais deles voltam às da origem e nenhum foi publicado de novo.`,
+      )
+    }
+  }
+  /** O workflow que vai por cima do existente, já com as credenciais do destino. */
+  const prepararSubstituto = (chave: string, json: Json, nome: string) => {
+    const corpo = limparParaCriar(json, nome)
+    const atual = existentePorChave.get(chave)
+    return { corpo, mantidas: atual ? herdarCredenciais(corpo, atual) : 0 }
+  }
+
+  for (const item of substituir) {
+    const origem = porChave.get(item.chave)
+    if (!origem) {
+      continue
+    }
+    const { corpo, mantidas } = prepararSubstituto(item.chave, origem.json, item.nomeFinal)
+    resultado.credenciaisMantidas += mantidas
+    paraSubstituir.push({ chave: item.chave, id: item.idExistente as string, nome: item.nomeFinal, workflow: corpo })
   }
 
   let enviados = 0
@@ -177,8 +239,36 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
       aoProgresso({ fase: 'workflows', feitos: enviados, total: paraEnviar.length, texto: `Criando workflows (${enviados}/${paraEnviar.length})` })
     }
   }
+  let substituidos = 0
+  if (!resultado.cancelado) {
+    const lotesSub = dividirEmLotes(paraSubstituir, (i) => JSON.stringify(i.workflow).length, WORKFLOWS_POR_PEDIDO, BYTES_POR_PEDIDO)
+    for (const lote of lotesSub) {
+      if (cancelado()) {
+        break
+      }
+      const envio: WorkflowParaAtualizar[] = lote.map(({ chave, id, workflow }) => ({ chave, id, workflow, motivo: 'substituicao' }))
+      let respostas: ResultadoItem[]
+      try {
+        respostas = casar(envio, await cliente.atualizarWorkflows(instancia, envio))
+      } catch (erro) {
+        respostas = envio.map((e) => ({ chave: e.chave, erro: mensagem(erro) }))
+      }
+      for (const r of respostas) {
+        const nome = lote.find((l) => l.chave === r.chave)?.nome ?? r.chave
+        if (r.id) {
+          resultado.substituidos.push({ chave: r.chave, nome, id: r.id })
+          novoId.set(r.chave, r.id)
+        } else {
+          resultado.falhas.push({ chave: r.chave, nome, erro: r.erro ?? 'erro desconhecido' })
+        }
+      }
+      substituidos += lote.length
+      aoProgresso({ fase: 'workflows', feitos: substituidos, total: paraSubstituir.length, texto: `Substituindo workflows (${substituidos}/${paraSubstituir.length})` })
+    }
+  }
 
   // 3) referências entre workflows
+  const finais = new Map<string, Json>() // chave -> JSON como ficou no destino (com as chamadas já trocadas)
   if (opcoes.remapearReferencias && !resultado.cancelado && novoId.size > 0) {
     const mapa = new Map<string, string>()
     for (const [chave, id] of novoId) {
@@ -187,23 +277,35 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
         mapa.set(idOrigem, id)
       }
     }
-    // O workflow pulado por já existir no destino também serve de alvo: aponta para o que está lá.
+    // O workflow pulado ou substituído no destino também serve de alvo: aponta para o que está lá.
     for (const item of plano.itens) {
       const idOrigem = porChave.get(item.chave)?.idOrigem
-      if (item.acao === 'pular' && item.idExistente && idOrigem) {
+      if ((item.acao === 'pular' || item.acao === 'substituir') && item.idExistente && idOrigem) {
         mapa.set(idOrigem, item.idExistente)
+      }
+    }
+    // Chamadas a workflows que não estão na seleção: o mesmo workflow, achado no destino pelo nome.
+    for (const ref of plano.referencias ?? []) {
+      if (ref.destinoId) {
+        mapa.set(ref.idOrigem, ref.destinoId)
       }
     }
 
     const paraAtualizar: (WorkflowParaAtualizar & { nome: string })[] = []
-    for (const criado of resultado.criados) {
+    const remapeados = new Map<string, Json>()
+    const ehSubstituido = new Set(resultado.substituidos.map((s) => s.chave))
+    for (const criado of [...resultado.criados, ...resultado.substituidos]) {
       const origem = porChave.get(criado.chave)
       if (!origem) {
         continue
       }
       const remapeado = remapearReferencias(origem.json, mapa)
       if (remapeado.trocas > 0) {
-        paraAtualizar.push({ chave: criado.chave, id: criado.id, nome: criado.nome, workflow: limparParaCriar(remapeado.workflow, criado.nome) })
+        const corpo = ehSubstituido.has(criado.chave)
+          ? prepararSubstituto(criado.chave, remapeado.workflow, criado.nome).corpo
+          : limparParaCriar(remapeado.workflow, criado.nome)
+        paraAtualizar.push({ chave: criado.chave, id: criado.id, nome: criado.nome, workflow: corpo })
+        remapeados.set(criado.chave, remapeado.workflow)
       }
     }
 
@@ -213,7 +315,7 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
       if (cancelado()) {
         break
       }
-      const envio: WorkflowParaAtualizar[] = lote.map(({ chave, id, workflow }) => ({ chave, id, workflow }))
+      const envio: WorkflowParaAtualizar[] = lote.map(({ chave, id, workflow }) => ({ chave, id, workflow, motivo: 'referencias' }))
       let respostas: ResultadoItem[]
       try {
         respostas = casar(envio, await cliente.atualizarWorkflows(instancia, envio))
@@ -225,10 +327,90 @@ export async function executarImportacao(args: ArgumentosExecucao): Promise<Resu
           resultado.referenciasComFalha.push({ chave: r.chave, nome: lote.find((l) => l.chave === r.chave)?.nome ?? r.chave, erro: r.erro ?? 'erro desconhecido' })
         } else {
           resultado.referenciasAtualizadas += 1
+          const final = remapeados.get(r.chave)
+          if (final) {
+            finais.set(r.chave, final)
+          }
         }
       }
       atualizados += lote.length
       aoProgresso({ fase: 'referencias', feitos: atualizados, total: paraAtualizar.length, texto: `Ligando os workflows entre si (${atualizados}/${paraAtualizar.length})` })
+    }
+  }
+
+  // 4) conferência das chamadas e republicação
+  const finalDe = (chave: string): Json | undefined => finais.get(chave) ?? porChave.get(chave)?.json
+  const enviadosAgora = [...resultado.criados, ...resultado.substituidos]
+
+  if (!resultado.cancelado && opcoes.remapearReferencias && idsExistentes) {
+    const conhecidos = new Set<string>([...idsExistentes, ...novoId.values()])
+    for (const item of enviadosAgora) {
+      const json = finalDe(item.chave)
+      if (!json) {
+        continue
+      }
+      const chamados = listarChamadasDosNodes(json)
+      for (const id of idsDeChamadaFixos(json)) {
+        if (!conhecidos.has(id)) {
+          resultado.chamadasQuebradas.push({ chave: item.chave, nome: item.nome, id, chamado: chamados.find((c) => c.id === id)?.nome ?? null })
+        }
+      }
+    }
+  }
+
+  const eraPublicado = (chave: string) => {
+    const atual = existentePorChave.get(chave)
+    return atual !== undefined && (atual.active === true || (typeof atual.activeVersionId === 'string' && atual.activeVersionId !== ''))
+  }
+  const paraPublicar = resultado.substituidos.filter((s) => eraPublicado(s.chave))
+  if (!resultado.cancelado && opcoes.republicar !== false && paraPublicar.length > 0) {
+    if (!cliente.publicarWorkflows) {
+      resultado.avisos.push('Esta conexão não publica workflows: publique de novo, no n8n, os substituídos que estavam publicados.')
+    } else {
+      // Quem é chamado vai antes de quem chama: o n8n só publica um workflow cujos sub-workflows já estão publicados.
+      const porId = new Map(paraPublicar.map((p) => [p.id, p]))
+      const visitados = new Set<string>()
+      const ordem: typeof paraPublicar = []
+      const visitar = (item: (typeof paraPublicar)[number]) => {
+        if (visitados.has(item.id)) {
+          return
+        }
+        visitados.add(item.id)
+        const json = finalDe(item.chave)
+        for (const id of json ? idsDeChamadaFixos(json) : []) {
+          const alvo = porId.get(id)
+          if (alvo) {
+            visitar(alvo)
+          }
+        }
+        ordem.push(item)
+      }
+      paraPublicar.forEach(visitar)
+
+      let publicadosAteAgora = 0
+      for (const lote of dividirEmLotes(ordem, () => 1, WORKFLOWS_POR_PEDIDO)) {
+        if (cancelado()) {
+          break
+        }
+        const envio: WorkflowParaPublicar[] = lote.map(({ chave, id, nome }) => ({ chave, id, nome }))
+        let respostas: ResultadoItem[]
+        try {
+          respostas = casar(envio, await cliente.publicarWorkflows(instancia, envio))
+        } catch (erro) {
+          respostas = envio.map((e) => ({ chave: e.chave, erro: mensagem(erro) }))
+        }
+        for (const r of respostas) {
+          const item = lote.find((l) => l.chave === r.chave)
+          const nome = item?.nome ?? r.chave
+          if (r.id && item) {
+            resultado.publicados.push({ chave: item.chave, nome, id: item.id })
+          } else {
+            resultado.publicacaoComFalha.push({ chave: r.chave, nome, erro: r.erro ?? 'erro desconhecido' })
+          }
+        }
+        publicadosAteAgora += lote.length
+        aoProgresso({ fase: 'publicacao', feitos: publicadosAteAgora, total: ordem.length, texto: `Publicando de novo os substituídos (${publicadosAteAgora}/${ordem.length})` })
+      }
     }
   }
 

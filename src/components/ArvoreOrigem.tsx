@@ -113,7 +113,12 @@ export function ArvoreOrigem({ raiz, selecionados, removidos, situacao, busca, d
         )}
         {plano?.acao === 'criar' && plano.nomeFinal !== plano.nome && (
           <span className="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] font-medium text-sky-700" title={plano.motivo}>
-            novo nome
+            Novo nome
+          </span>
+        )}
+        {plano?.acao === 'substituir' && plano.idExistente && plano.nomeFinal === plano.nome &&(
+          <span className="shrink-0 rounded bg-teal-700/15 px-1.5 py-0.5 text-[11px] font-medium text-teal-700" title={plano.motivo}>
+            Vai substituir
           </span>
         )}
         <span className="shrink-0 text-[11px] text-slate-400">

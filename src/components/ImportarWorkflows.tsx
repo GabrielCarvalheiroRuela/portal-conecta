@@ -119,6 +119,9 @@ export function ImportarWorkflows() {
   const [caminhoCompleto, setCaminhoCompleto] = useState(true)
   const [conflito, setConflito] = useState<PoliticaConflito>('pular')
   const [remapear, setRemapear] = useState(true)
+  // chamadas a workflows de fora da seleção com mais de um candidato no destino: ID de origem -> ID escolhido
+  const [escolhas, setEscolhas] = useState<Record<string, string>>({})
+  const [republicar, setRepublicar] = useState(true)
 
   // execução
   const [executando, setExecutando] = useState(false)
@@ -175,7 +178,15 @@ export function ImportarWorkflows() {
         nomes.set(w.nome.trim().toLowerCase(), w.id)
         porPasta.set(pasta, nomes)
       }
-      setDestinoDados({ mapa, existentes: { pastas: mapa.pastas, porPasta, ids: new Set(lista.workflows.map((w) => w.id)) } })
+      setDestinoDados({
+        mapa,
+        existentes: {
+          pastas: mapa.pastas,
+          porPasta,
+          ids: new Set(lista.workflows.map((w) => w.id)),
+          lista: lista.workflows.map((w) => ({ id: w.id, nome: w.nome, pasta: mapa.workflows[w.id] ?? null })),
+        },
+      })
     } catch (e) {
       if (aindaVale()) {
         setDestinoDados(null)
@@ -191,6 +202,7 @@ export function ImportarWorkflows() {
   useEffect(() => {
     setDestinoDados(null)
     setDestinoId(null)
+    setEscolhas({})
     setResultado(null)
     if (!instancia) {
       setCarregandoDestino(false)
@@ -288,14 +300,15 @@ export function ImportarWorkflows() {
     setOrigem(null)
     setSelecionados(new Set())
     setRemovidos(new Set())
+    setEscolhas({})
     setBusca('')
     setErroOrigem(null)
     setResultado(null)
   }
 
   const opcoes: OpcoesImportacao = useMemo(
-    () => ({ destinoId, subpasta, caminhoCompleto, conflito, remapearReferencias: remapear }),
-    [destinoId, subpasta, caminhoCompleto, conflito, remapear],
+    () => ({ destinoId, subpasta, caminhoCompleto, conflito, remapearReferencias: remapear, escolhas, republicar }),
+    [destinoId, subpasta, caminhoCompleto, conflito, remapear, escolhas, republicar],
   )
   const disponiveis = useMemo(() => (origem ? origem.workflows.filter((w) => !removidos.has(w.chave)) : []), [origem, removidos])
   const selecionadosLista = useMemo(() => disponiveis.filter((w) => selecionados.has(w.chave)), [disponiveis, selecionados])
@@ -361,6 +374,7 @@ export function ImportarWorkflows() {
         cliente: clienteImportacao,
         aoProgresso: setProgresso,
         sinal: controleNovo.signal,
+        idsExistentes: destinoDados?.existentes.ids,
       })
       setResultado(r)
     } catch (e) {
@@ -618,7 +632,7 @@ export function ImportarWorkflows() {
                   aoMudar={setRemapear}
                   desabilitado={travado}
                   titulo="Ligar os workflows entre si"
-                  ajuda="Como o n8n dá IDs novos, troca nas chamadas a sub-workflows o ID antigo pelo novo."
+                  ajuda="Como o n8n dá IDs novos, troca nas chamadas a sub-workflows o ID antigo pelo novo. Se o sub-workflow não está na seleção, procura o mesmo (pelo nome) no destino."
                 />
                 <Select
                   id="importar-conflito"
@@ -629,10 +643,18 @@ export function ImportarWorkflows() {
                 >
                   <option value="pular">Pular (não importar esse)</option>
                   <option value="renomear">Importar com outro nome ("… (importado)")</option>
+                  <option value="substituir">Substituir, mantendo o Id original.</option>
                 </Select>
-                <div className="-mt-1.5">
-                  <Explicacao id="importar-conflito-explicacao" rotulo="Explicação" texto="Nada é sobrescrito: o que já existe nunca é alterado." />
-                </div>
+                {conflito === 'substituir' && (
+                  <Opcao
+                    id="importar-republicar"
+                    marcado={republicar}
+                    aoMudar={setRepublicar}
+                    desabilitado={travado}
+                    titulo="Publicar de novo os substituídos que já estavam publicados"
+                    ajuda="Substituir só atualiza o rascunho: quem chama o workflow continua usando a versão publicada antiga. Ligado, o portal publica de novo, no fim, os que estavam publicados (sub-workflows antes de quem chama). Os workflows novos continuam inativos."
+                  />
+                )}
               </div>
             </Painel>
 
@@ -641,6 +663,9 @@ export function ImportarWorkflows() {
                 {plano ? (
                   <ResumoImportacao
                     plano={plano}
+                    politica={conflito}
+                    republicar={republicar}
+                    aoEscolher={(idOrigem, idDestino) => setEscolhas((atual) => ({ ...atual, [idOrigem]: idDestino }))}
                     instanciaNome={instanciaNome}
                     destinoTexto={destinoTexto}
                     bloqueio={bloqueio}
