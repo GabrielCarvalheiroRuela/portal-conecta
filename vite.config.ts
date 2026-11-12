@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { mockWorkflows } from './vite-mock-wf'
 
-// Os proxies de /api, /acesso, /filas-integracao e /wf existem só em desenvolvimento, para não esbarrar em CORS.
+// Os proxies de /api, /acesso, /filas-integracao, /webservices-status e /wf existem só em desenvolvimento, para não esbarrar em CORS.
 // Em produção quem faz esse papel são os locations do nginx.conf.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -47,6 +47,13 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/filas-integracao/,'/webhook/filas-integracao'),
+        },
+        // Situação dos webservices: o webhook só devolve a última checagem que o workflow Monitoramento_Webservices guardou.
+        '/webservices-status': {
+          target: n8n,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/webservices-status/, '/webhook/webservices-status'),
         },
         // /wf-importar vem antes de /wf: o Vite casa pelo começo do caminho, e "/wf" também casaria com ele.
         '/wf-importar': {

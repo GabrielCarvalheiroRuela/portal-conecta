@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { ApiError, apiGet } from '../services/api'
+import { coletaWebservices } from '../services/webservices'
 import { ROTULO_SITUACAO, SITUACOES, type IntegracaoResumo, type PlataformaResumo } from '../types/integracao'
 import { ModalEditarIntegracao } from './ModalEditarIntegracao'
 import { PedidosDoCliente } from './PedidosDoCliente'
@@ -16,6 +17,7 @@ import {
   EstadoVazio,
   EtiquetaPlataforma,
   EtiquetaSituacao,
+  EtiquetaSituacaoWebservice,
   Linha,
   RodapeContagem,
   SelectFiltro,
@@ -63,7 +65,8 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
   /** Lojista cujos pedidos estão abertos. Enquanto aberto, a lista fica guardada com os filtros. */
-  const [clienteAberto, setClienteAberto] = useState<{ nome: string; codigo: number } | null>(null)
+  // A integração da linha clicada: a tela de pedidos é do lojista, mas mostra o webservice desta integração.
+  const [integracaoAberta, setIntegracaoAberta] = useState<IntegracaoResumo | null>(null)
   /** Integração cujo popup de edição está aberto. */
   const [emEdicao, setEmEdicao] = useState<IntegracaoResumo | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
@@ -105,6 +108,17 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
     carregar()
   }, [carregar, versao])
 
+  // Situação do webservice de cada integração, lida da última checagem que o Monitoramento deixou em memória.
+  // Esta tela não chama o n8n: sem checagem nesta sessão (ou para integração que não está ativa), fica "—".
+  const { retrato: retratoWebservices } = useSyncExternalStore(coletaWebservices.assinar, coletaWebservices.ler)
+  const webservices = useMemo(
+    () => new Map((retratoWebservices?.itens ?? []).map((w) => [w.chave, w])),
+    [retratoWebservices],
+  )
+  const checadoAs = retratoWebservices?.geradoEm
+    ? new Date(retratoWebservices.geradoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : null
+
   const visiveis = useMemo(() => {
     const termo = normalizar(busca.trim())
     const filtradas = termo
@@ -131,12 +145,11 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
   const temFiltro = Boolean(plataforma || ativo || busca)
   const primeiraCarga = carregando && integracoes.length === 0 && !erro
 
-  if (clienteAberto) {
+  if (integracaoAberta) {
     return (
       <PedidosDoCliente
-        nomeCliente={clienteAberto.nome}
-        codigoCliente={clienteAberto.codigo}
-        aoVoltar={() => setClienteAberto(null)}
+        integracao={integracaoAberta}
+        aoVoltar={() => setIntegracaoAberta(null)}
       />
     )
   }
@@ -249,12 +262,14 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
               { rotulo: 'Lojista', className: 'w-full' },
               { rotulo: 'Plataforma' },
               { rotulo: 'Situação' },
+              { rotulo: 'Webservice' },
               { rotulo: 'Cadastrada em' },
               { rotulo: 'Ações' },
             ]}
           >
             {visiveis.map((i) => {
               const quando = formatarData(i.dataInclusao)
+              const webservice = webservices.get(`${i.codigoIntegracao}|${i.codigoCliente}`)
               return (
                 <Linha key={`${i.codigoIntegracao}-${i.codigoCliente}`}>
                   <Celula primeira className="whitespace-nowrap">
@@ -263,7 +278,7 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
                   <Celula className="whitespace-nowrap">
                     <button
                       type="button"
-                      onClick={() => setClienteAberto({ nome: i.nomeCliente, codigo: i.codigoCliente })}
+                      onClick={() => setIntegracaoAberta(i)}
                       title="Ver pedidos deste lojista"
                       className="group/lojista inline-flex items-center gap-1 font-medium text-slate-900 transition-colors hover:text-brand-700"
                     >
@@ -279,6 +294,25 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
                   </Celula>
                   <Celula className="whitespace-nowrap">
                     <EtiquetaSituacao situacao={i.situacao} />
+                  </Celula>
+                  <Celula className="whitespace-nowrap">
+                    {webservice ? (
+                      <EtiquetaSituacaoWebservice
+                        item={webservice}
+                        title={`Checado às ${checadoAs}${webservice.erro ? ` · ${webservice.erro}` : ''}`}
+                      />
+                    ) : (
+                      <span
+                        className="cursor-help text-slate-300"
+                        title={
+                          retratoWebservices
+                            ? 'Só as integrações ativas são checadas.'
+                            : 'Sem checagem nesta sessão. Abra o Monitoramento para checar os webservices.'
+                        }
+                      >
+                        —
+                      </span>
+                    )}
                   </Celula>
                   <Celula className="whitespace-nowrap tabular-nums">
                     {quando ? (

@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { ApiError, apiGet } from '../services/api'
+import { coletaWebservices } from '../services/webservices'
+import type { IntegracaoResumo } from '../types/integracao'
 import type { PedidoDoCliente } from '../types/monitoramento'
+import { tempoDesde } from '../types/webservices'
 import { ModalReprocessarPedido } from './ModalReprocessarPedido'
 import { Alerta } from './ui/Alerta'
 import { IconeCaixa, IconeLupa, IconeReciclar, IconeVoltar } from './ui/Icones'
@@ -14,14 +17,15 @@ import {
   Codigo,
   EstadoVazio,
   EtiquetaPlataforma,
+  EtiquetaSituacaoWebservice,
   Linha,
   SelectFiltro,
   Tabela,
 } from './ui/Tabela'
 
 interface Props {
-  nomeCliente: string
-  codigoCliente: number
+  /** A integração da linha clicada na lista: os pedidos são do lojista, o webservice é desta integração. */
+  integracao: IntegracaoResumo
   aoVoltar: () => void
 }
 
@@ -68,7 +72,8 @@ function formatarDataHora(valor?: string | null): { data: string; hora: string }
  * gravados com outro nome — ex.: "NAUTICA TINTAS 007" para o lojista "NAUTICA TINTAS" — não
  * aparecem aqui.
  */
-export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props) {
+export function PedidosDoCliente({ integracao, aoVoltar }: Props) {
+  const { nomeCliente, codigoCliente } = integracao
   const [pedidos, setPedidos] = useState<PedidoDoCliente[]>([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -154,11 +159,22 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
     setPlataforma('')
   }
 
+  // Situação do webservice desta integração, lida da última checagem que o Monitoramento deixou em memória.
+  // Esta tela não chama o n8n: sem checagem nesta sessão (ou integração que não está ativa), só diz por quê.
+  const { retrato: retratoWebservices } = useSyncExternalStore(coletaWebservices.assinar, coletaWebservices.ler)
+  const webservice = useMemo(
+    () => retratoWebservices?.itens.find((w) => w.chave === `${integracao.codigoIntegracao}|${codigoCliente}`),
+    [retratoWebservices, integracao.codigoIntegracao, codigoCliente],
+  )
+  const checadoAs = retratoWebservices?.geradoEm
+    ? new Date(retratoWebservices.geradoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : null
+
   return (
     <div className="space-y-6">
       {/* Cabeçalho da tela */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <button
             type="button"
             onClick={aoVoltar}
@@ -171,11 +187,37 @@ export function PedidosDoCliente({ nomeCliente, codigoCliente, aoVoltar }: Props
           </button>
           <span className="hidden h-8 w-px bg-slate-200 sm:block" aria-hidden="true" />
           <div>
-            <h2 className="text-lg font-semibold tracking-tight text-slate-900">
-              {nomeCliente}
-              <span className="ml-2 text-sm font-normal text-slate-400 tabular-nums">#{codigoCliente}</span>
-            </h2>
-            <p className="text-[13px] text-slate-500">Pedidos do lojista em todos os status.</p>
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+                {nomeCliente}
+                <span className="ml-2 text-sm font-normal text-slate-400 tabular-nums">#{codigoCliente}</span>
+              </h2>
+              <EtiquetaPlataforma nome={integracao.plataforma} />
+              <Codigo>{integracao.codigoIntegracao}</Codigo>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px]">
+              <span className="font-mono text-xs text-slate-500">
+                {integracao.urlWebservice || 'Sem URL de webservice cadastrada'}
+              </span>
+              {webservice ? (
+                <>
+                  <EtiquetaSituacaoWebservice item={webservice} />
+                  <span className="text-xs text-slate-400 tabular-nums">checado às {checadoAs}</span>
+                </>
+              ) : (
+                <span className="text-xs text-slate-400">
+                  {retratoWebservices
+                    ? '· integração não ativa, o webservice não é checado'
+                    : '· sem checagem nesta sessão; abra o Monitoramento para checar'}
+                </span>
+              )}
+            </div>
+            {webservice?.situacao === 'fora' && (
+              <p className="mt-1 text-xs text-red-700">
+                {webservice.foraDesde && <span className="font-medium">Fora {tempoDesde(webservice.foraDesde)}. </span>}
+                {webservice.erro}
+              </p>
+            )}
           </div>
         </div>
         <BotaoAtualizar onClick={carregar} carregando={carregando} />
