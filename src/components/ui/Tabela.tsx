@@ -7,6 +7,7 @@ import type {
   SelectHTMLAttributes,
 } from 'react'
 import { ROTULO_SITUACAO, type SituacaoIntegracao } from '../../types/integracao'
+import type { ItemWebservice } from '../../types/webservices'
 import { IconeAtualizar, IconeLupa, IconeX } from './Icones'
 
 /*
@@ -124,6 +125,22 @@ export function EtiquetaSituacao({ situacao }: { situacao: SituacaoIntegracao })
     >
       <span className={`h-1.5 w-1.5 rounded-full ${tom.ponto}`} />
       {ROTULO_SITUACAO[situacao]}
+    </span>
+  )
+}
+
+/** ONLINE ou FORA DO AR do webservice do ERP, como veio da última checagem do n8n. */
+export function EtiquetaSituacaoWebservice({ item, title }: { item: ItemWebservice; title?: string }) {
+  const fora = item.situacao === 'fora'
+  return (
+    <span
+      title={title ?? (item.http ? `Respondeu HTTP ${item.http}` : fora ? 'Não respondeu' : undefined)}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+        fora ? 'bg-red-50 text-red-700 ring-red-600/20' : 'bg-emerald-50 text-emerald-700 ring-emerald-600/15'
+      }`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${fora ? 'bg-red-500' : 'bg-emerald-500'}`} />
+      {fora ? 'FORA DO AR' : 'ONLINE'}
     </span>
   )
 }
