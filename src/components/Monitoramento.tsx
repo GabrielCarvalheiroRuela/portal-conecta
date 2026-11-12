@@ -6,10 +6,12 @@ import {
   lerEstadoFilas,
   sincronizarFilas,
 } from '../services/filas'
+import { coletaWebservices } from '../services/webservices'
 import { classificarClientes } from '../types/filas'
 import type { FiltrosProdutos, PaginaProdutos, PedidoComErro, ProdutoComErro } from '../types/monitoramento'
 import { PainelFilas } from './PainelFilas'
-import { IconeAlerta, IconeCaixa, IconeCheck, IconeEtiqueta, IconeLupa, IconePessoas } from './ui/Icones'
+import { PainelWebservices } from './PainelWebservices'
+import { IconeAlerta, IconeAtividade, IconeCaixa, IconeCheck, IconeEtiqueta, IconeLupa, IconePessoas } from './ui/Icones'
 import {
   BotaoAtualizar,
   BotaoLimpar,
@@ -26,7 +28,7 @@ import {
   Tabela,
 } from './ui/Tabela'
 
-type SubAba = 'pedidos' | 'produtos' | 'filas'
+type SubAba = 'pedidos' | 'produtos' | 'filas' | 'webservices'
 
 const INTERVALO_ATUALIZACAO_MS = 10_000
 
@@ -163,7 +165,8 @@ const chavePedido = (p: PedidoComErro) => `${p.cliente ?? ''}|${p.plataforma ?? 
 
 /**
  * Monitoramento das integrações: pedidos e produtos que falharam, atualizados a cada 10s, e as filas
- * de processamento por cliente, coletadas pelo n8n a cada 5 minutos. Somente leitura. Usa a mesma sessão do portal (JWT do Monint).
+ * de processamento por cliente, coletadas pelo n8n a cada 5 minutos, e os webservices do ERP que o n8n checa a
+ * cada minuto. Somente leitura. Usa a mesma sessão do portal (JWT do Monint).
  */
 export function Monitoramento() {
   const [subAba, setSubAba] = useState<SubAba>('pedidos')
@@ -195,6 +198,15 @@ export function Monitoramento() {
   } = useSyncExternalStore(assinarFilas, lerEstadoFilas)
 
   useEffect(() => iniciarSincronizacaoAutomatica(), [])
+
+  // Mesma ideia das filas, mas aqui a leitura é leve: quem checa os webservices é o n8n, a cada minuto.
+  const {
+    retrato: retratoWebservices,
+    falha: falhaWebservices,
+    sincronizando: lendoWebservices,
+  } = useSyncExternalStore(coletaWebservices.assinar, coletaWebservices.ler)
+
+  useEffect(() => coletaWebservices.iniciarAutomatica(), [])
 
   useEffect(() => {
     let ativo = true
@@ -285,6 +297,13 @@ export function Monitoramento() {
     () => linhasFilas.filter((l) => l.filasEmAtencao.length > 0).length,
     [linhasFilas],
   )
+
+  const webservicesFora = useMemo(
+    () => (retratoWebservices?.itens ?? []).filter((w) => w.situacao === 'fora').length,
+    [retratoWebservices],
+  )
+
+  const webservicesChecados = !!retratoWebservices?.geradoEm
 
   const clientes = useMemo(
     () =>
@@ -388,12 +407,21 @@ export function Monitoramento() {
   ]
 
   const emFilas = subAba === 'filas'
+  const emWebservices = subAba === 'webservices'
   // As filas usam amarelo ("atenção"): ainda não é falha, é volume acima do normal.
   const abas = [
     { id: 'pedidos', rotulo: 'Pedidos', contador: totalPedidos, icone: <IconeCaixa />, tom: 'erro' },
     { id: 'produtos', rotulo: 'Produtos', contador: totalProdutos, icone: <IconeEtiqueta />, tom: 'erro' },
     { id: 'filas', rotulo: 'Filas', contador: clientesComFilaEmAtencao, icone: <IconeAlerta />, tom: 'atencao' },
+    { id: 'webservices', rotulo: 'Webservices', contador: webservicesFora, icone: <IconeAtividade />, tom: 'erro' },
   ] as const
+
+  // A hora ao lado do selo "ao vivo": a da última coleta da aba aberta.
+  const horaDoSelo = emFilas
+    ? retratoFilas?.geradoEm
+    : emWebservices
+      ? retratoWebservices?.geradoEm
+      : ultimaAtualizacao
 
   const cabecalho = (
     <>
@@ -407,7 +435,13 @@ export function Monitoramento() {
               role="tab"
               aria-selected={ativa}
               onClick={() => trocarSubAba(id)}
-              title={id === 'filas' ? 'Clientes com alguma fila acima do limite' : undefined}
+              title={
+                id === 'filas'
+                  ? 'Clientes com alguma fila acima do limite'
+                  : id === 'webservices'
+                    ? 'Webservices fora do ar'
+                    : undefined
+              }
               className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all duration-150 ${
                 ativa
                   ? 'bg-surface text-slate-900 shadow-soft ring-1 ring-slate-200/80 dark:bg-slate-200 dark:ring-slate-300/60'
@@ -445,18 +479,18 @@ export function Monitoramento() {
           rotuloCarregando="Sincronizando…"
         />
       )}
+      {emWebservices && (
+        <BotaoAtualizar onClick={() => void coletaWebservices.sincronizar()} carregando={lendoWebservices} />
+      )}
       <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
         <span className="relative flex h-2 w-2">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
         </span>
         <span>
-          {emFilas ? 'Coleta a cada 5 min' : 'Ao vivo · a cada 10s'}
-          {(emFilas ? retratoFilas?.geradoEm : ultimaAtualizacao) && (
-            <span className="text-emerald-600/70 tabular-nums">
-              {' '}
-              · {new Date((emFilas ? retratoFilas?.geradoEm : ultimaAtualizacao) as string | Date).toLocaleTimeString('pt-BR')}
-            </span>
+          {emFilas ? 'Coleta a cada 5 min' : emWebservices ? 'Checagem a cada 1 min' : 'Ao vivo · a cada 10s'}
+          {horaDoSelo && (
+            <span className="text-emerald-600/70 tabular-nums"> · {new Date(horaDoSelo).toLocaleTimeString('pt-BR')}</span>
           )}
         </span>
       </div>
@@ -465,7 +499,7 @@ export function Monitoramento() {
   )
 
   const resumo = (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
       <CartaoResumo
         rotulo="Pedidos com erro"
         valor={totalPedidos}
@@ -496,8 +530,37 @@ export function Monitoramento() {
         }
         icone={<IconeAlerta />}
       />
+      <CartaoResumo
+        rotulo="Webservices fora do ar"
+        valor={webservicesFora}
+        // Vermelho com algum fora do ar; verde quando a checagem já veio e não há nenhum. Antes da primeira
+        // checagem fica neutro: zero ali ainda não quer dizer que está tudo no ar.
+        destaque={webservicesFora > 0 || webservicesChecados}
+        tom={webservicesFora > 0 ? 'erro' : 'sucesso'}
+        legenda={
+          webservicesFora > 0
+            ? 'Sem resposta na última checagem'
+            : webservicesChecados
+              ? 'Todos respondendo'
+              : 'Aguardando a checagem'
+        }
+        icone={<IconeAtividade />}
+      />
     </div>
   )
+
+  if (emWebservices) {
+    return (
+      <div className="space-y-6">
+        {resumo}
+        <PainelWebservices
+          cabecalho={cabecalho}
+          retrato={retratoWebservices}
+          indisponivel={falhaWebservices && retratoWebservices === null}
+        />
+      </div>
+    )
+  }
 
   if (emFilas) {
     return (
@@ -780,22 +843,32 @@ function CartaoResumo({
   icone: ReactNode
   legenda?: string
   destaque?: boolean
-  /** Cor do destaque: vermelho para falha, amarelo para atenção. */
-  tom?: 'erro' | 'atencao'
+  /** Cor do destaque: vermelho para falha, amarelo para atenção, verde para "está tudo certo". */
+  tom?: 'erro' | 'atencao' | 'sucesso'
 }) {
-  const cor = tom === 'atencao' ? 'amber' : 'red'
+  const cores = {
+    erro: { faixa: 'bg-red-500', icone: 'bg-red-50 text-red-600 ring-red-600/10', texto: 'text-red-600', ponto: 'bg-red-500' },
+    atencao: {
+      faixa: 'bg-amber-500',
+      icone: 'bg-amber-50 text-amber-600 ring-amber-600/10',
+      texto: 'text-amber-600',
+      ponto: 'bg-amber-500',
+    },
+    sucesso: {
+      faixa: 'bg-emerald-500',
+      icone: 'bg-emerald-50 text-emerald-600 ring-emerald-600/10',
+      texto: 'text-emerald-600',
+      ponto: 'bg-emerald-500',
+    },
+  }[tom]
   return (
     <div className="group relative overflow-hidden rounded-xl border border-slate-200/80 bg-surface p-5 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover">
-      {destaque && <span className={`absolute inset-x-0 top-0 h-[3px] ${tom === 'atencao' ? 'bg-amber-500' : 'bg-red-500'}`} />}
+      {destaque && <span className={`absolute inset-x-0 top-0 h-[3px] ${cores.faixa}`} />}
       <div className="flex items-start justify-between gap-3">
         <p className="text-[13px] font-medium text-slate-500">{rotulo}</p>
         <span
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset transition-transform duration-200 group-hover:scale-110 ${
-            destaque
-              ? cor === 'amber'
-                ? 'bg-amber-50 text-amber-600 ring-amber-600/10'
-                : 'bg-red-50 text-red-600 ring-red-600/10'
-              : 'bg-brand-50 text-brand-600 ring-brand-600/10'
+            destaque ? cores.icone : 'bg-brand-50 text-brand-600 ring-brand-600/10'
           }`}
         >
           <span className="h-[18px] w-[18px]">{icone}</span>
@@ -807,11 +880,11 @@ function CartaoResumo({
       {legenda && (
         <p
           className={`mt-3 flex items-center gap-1.5 text-xs font-medium ${
-            destaque ? (cor === 'amber' ? 'text-amber-600' : 'text-red-600') : 'text-slate-500'
+            destaque ? cores.texto : 'text-slate-500'
           }`}
         >
           <span
-            className={`h-1.5 w-1.5 rounded-full ${destaque ? (cor === 'amber' ? 'bg-amber-500' : 'bg-red-500') : 'bg-slate-300'}`}
+            className={`h-1.5 w-1.5 rounded-full ${destaque ? cores.ponto : 'bg-slate-300'}`}
           />
           {legenda}
         </p>
