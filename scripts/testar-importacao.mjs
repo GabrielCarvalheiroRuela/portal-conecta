@@ -1,7 +1,7 @@
 // Testes da importação de workflows (sem navegador e sem n8n): `npm run test:importacao`.
 //
 // Parte 1 e 2 testam a lógica do portal (src/importacao/*): leitor de ZIP, árvore de origem, limpeza do workflow,
-// ligação entre workflows, plano e executor. A parte 3 roda o código REAL dos nodes de n8n/Portal_WF_Importar.json
+// ligação entre workflows, plano e executor. A parte 3 roda o código REAL dos nodes do workflow Portal_WF_Importar (JSON exportado do n8n, em PORTAL_WF_IMPORTAR_JSON)
 // contra uma API do n8n simulada com o esquema estrito da API pública, e liga o executor do portal a ela.
 //
 // Precisa do Node 20+ (Blob, File e DecompressionStream globais). Usa o esbuild que já vem com o Vite.
@@ -268,7 +268,12 @@ async function parte2() {
 
 // ---------------------------------------------------------------- parte 3: o workflow do n8n
 async function parte3() {
-  const wfN8n = JSON.parse(readFileSync(join(raiz, 'n8n', 'Portal_WF_Importar.json'), 'utf8'))
+  const arquivoN8n = process.env.PORTAL_WF_IMPORTAR_JSON
+  if (!arquivoN8n) {
+    secao('Workflow do n8n: pulado (defina PORTAL_WF_IMPORTAR_JSON com o caminho do JSON exportado do n8n)')
+    return
+  }
+  const wfN8n = JSON.parse(readFileSync(arquivoN8n, 'utf8'))
   const codigoDe = (nome) => {
     const n = wfN8n.nodes.find((x) => x.name === nome)
     if (!n) throw new Error('node nao encontrado em Portal_WF_Importar.json: ' + nome)
@@ -278,7 +283,9 @@ async function parte3() {
     ler: codigoDe('Ler Credencial'), checar: codigoDe('Checar Permissao'), validar: codigoDe('Validar Pedido'),
     prepPastas: codigoDe('Preparar Pastas'), prepWorkflows: codigoDe('Preparar Workflows'), prepAtualizar: codigoDe('Preparar Atualizacoes'),
     montaPastas: codigoDe('Montar Resposta (pastas)'), montaWorkflows: codigoDe('Montar Resposta (workflows)'), montaAtualizar: codigoDe('Montar Resposta (atualizar)'),
+    prepPublicar: codigoDe('Preparar Publicacoes'), montaPublicar: codigoDe('Montar Resposta (publicar)'),
   }
+  const temPlaceholder = /projetoId: 'TROCAR/.test(C.checar) // o JSON de teste ainda tem instancia sem projeto preenchido?
   const jwt = (sub) => 'x.' + Buffer.from(JSON.stringify({ sub })).toString('base64url') + '.y'
 
   secao('Workflow do n8n: estrutura')
@@ -291,14 +298,16 @@ async function parte3() {
   confere(webhook.parameters.path === 'portal-wf-importar' && webhook.parameters.httpMethod === 'POST', 'webhook POST em portal-wf-importar')
   confere(wfN8n.active === false && !('id' in wfN8n), 'entregue inativo e sem ID (importa como workflow novo)')
   const nodesHttp = wfN8n.nodes.filter((n) => n.type.endsWith('.httpRequest') && n.credentials)
-  confere(nodesHttp.every((n) => n.credentials.n8nApi.id === 'TROCAR_APOS_IMPORTAR'), 'nenhuma credencial real dentro do arquivo')
-  confere(nodesHttp.length === 9 && ['Criar Pasta', 'Criar Workflow', 'Atualizar Workflow'].every((p) => ['automaker_prod', 'automaker_1', 'automakerdev_geral'].every((i) => nodesHttp.some((n) => n.name === `${p} (${i})`))), '3 nodes de escrita para cada uma das 3 instancias')
+  confere(nodesHttp.every((n) => Object.keys(n.credentials).join() === 'n8nApi'), 'os nodes HTTP so usam credencial do tipo n8nApi')
+  confere(nodesHttp.length === 12 && ['Criar Pasta', 'Criar Workflow', 'Atualizar Workflow', 'Publicar Workflow'].every((p) => ['automaker_prod', 'automaker_1', 'automakerdev_geral'].every((i) => nodesHttp.some((n) => n.name === `${p} (${i})`))), '4 nodes de escrita (criar pasta, criar, atualizar, publicar) para cada uma das 3 instancias')
+  const publicar = nodesHttp.filter((n) => n.name.startsWith('Publicar Workflow'))
+  confere(publicar.every((n) => n.parameters.method === 'POST' && /\/activate$/.test(n.parameters.url)), 'publicar chama POST /workflows/{id}/activate')
   const seletores = wfN8n.nodes.filter((n) => n.name.startsWith('Qual Instancia?'))
-  confere(seletores.length === 3 && seletores.every((n) => wfN8n.connections[n.name].main.length === 4 && wfN8n.connections[n.name].main[3][0].node === 'Responder 403'), 'cada seletor de instancia tem 3 saidas e a "outra" vai para 403')
+  confere(seletores.length === 4 && seletores.every((n) => wfN8n.connections[n.name].main.length === 4 && wfN8n.connections[n.name].main[3][0].node === 'Responder 403'), 'cada seletor de instancia tem 3 saidas e a "outra" vai para 403')
 
   // API do n8n simulada
   const criarApi = () => {
-    const api = { pastas: [{ id: 'PAI1', name: 'Dev', parentFolderId: null }], wfs: [], chamadas: [], seq: 0 }
+    const api = { pastas: [{ id: 'PAI1', name: 'Dev', parentFolderId: null }], wfs: [], chamadas: [], publicados: [], seq: 0 }
     const id = (x) => x + String(++api.seq).padStart(3, '0')
     api.http = (metodo, url, corpo) => {
       api.chamadas.push(metodo + ' ' + url)
@@ -312,6 +321,11 @@ async function parte3() {
         const e = problemasDoEsquema(corpo); if (e.length) return { statusCode: 400, body: { message: 'request.body ' + e.join(', ') } }
         if (corpo.name.includes('REDE')) return { error: { message: 'ECONNRESET' } }
         const w = { id: id('W'), ...corpo }; api.wfs.push(w); return { statusCode: 200, body: { id: w.id, name: w.name } }
+      }
+      if (metodo === 'POST' && (m = url.match(/\/api\/v1\/workflows\/([^/]+)\/activate$/))) {
+        const w = api.wfs.find((x) => x.id === m[1]); if (!w) return { statusCode: 404, body: { message: 'not found' } }
+        if (w.name.includes('SUBINATIVO')) return { statusCode: 400, body: { message: 'Workflow has issues: sub-workflow not published' } }
+        w.active = true; api.publicados.push(w.id); return { statusCode: 200, body: { id: w.id, active: true } }
       }
       if (metodo === 'PUT' && (m = url.match(/\/api\/v1\/workflows\/([^/?]+)$/))) {
         const w = api.wfs.find((x) => x.id === m[1]); if (!w) return { statusCode: 404, body: { message: 'not found' } }
@@ -345,6 +359,7 @@ async function parte3() {
       'criar-pastas': ['Preparar Pastas', C.prepPastas, 'Montar Resposta (pastas)', C.montaPastas, (j) => api.http('POST', j.baseUrl + '/api/v1/projects/' + j.projetoId + '/folders', j.corpo)],
       'criar-workflows': ['Preparar Workflows', C.prepWorkflows, 'Montar Resposta (workflows)', C.montaWorkflows, (j) => api.http('POST', j.baseUrl + '/api/v1/workflows', j.corpo)],
       'atualizar-workflows': ['Preparar Atualizacoes', C.prepAtualizar, 'Montar Resposta (atualizar)', C.montaAtualizar, (j) => api.http('PUT', j.baseUrl + '/api/v1/workflows/' + j.id, j.corpo)],
+      'publicar-workflows': ['Preparar Publicacoes', C.prepPublicar, 'Montar Resposta (publicar)', C.montaPublicar, (j) => api.http('POST', j.baseUrl + '/api/v1/workflows/' + j.id + '/activate', {})],
     }[v.acao]
     await rodar(prep, codPrep, saidas['Checar Permissao'])
     const respostas = saidas[prep].map((it) => ({ json: chamar(it.json) }))
@@ -362,12 +377,14 @@ async function parte3() {
   const idsLista = r.corpo.instancias.map((i) => i.id)
   confere(r.status === 200 && idsLista.join() === 'automaker_prod,automaker_1,automakerdev_geral' && r.corpo.instancias.every((i) => !('baseUrl' in i) && !('projetoId' in i)), 'lista as 3 instancias liberadas sem expor a URL nem o projeto')
   r = await n8n(api, { acao: 'instancias' }, { config: { semProjetos: true } })
-  confere(r.status === 200 && r.corpo.instancias.length === 1 && r.corpo.instancias[0].id === 'automakerdev_geral', 'instancia com projetoId ainda por preencher (TROCAR_...) fica escondida')
+  if (temPlaceholder) confere(r.status === 200 && r.corpo.instancias.length === 1 && r.corpo.instancias[0].id === 'automakerdev_geral', 'instancia com projetoId ainda por preencher (TROCAR_...) fica escondida')
   const semProj = criarApi()
   r = await n8n(semProj, { acao: 'criar-pastas', instancia: 'automaker_prod', itens: [{ chave: 'a', nome: 'x' }] }, { config: { semProjetos: true } })
-  confere(r.status === 403 && semProj.chamadas.length === 0, 'instancia sem projetoId nao recebe importacao (403, nenhuma chamada)')
+  if (temPlaceholder) confere(r.status === 403 && semProj.chamadas.length === 0, 'instancia sem projetoId nao recebe importacao (403, nenhuma chamada)')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: null })).status === 401, 'token invalido: 401')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: 'USUARIO' })).status === 403, 'usuario comum: 403')
+  confere((await n8n(api, { acao: 'instancias' }, { perfil: 'DEV' })).status === 403, 'perfil DEV exporta mas nao importa: 403')
+  confere((await n8n(api, { acao: 'criar-workflows', ...base, itens: [{ chave: 'a', pastaId: null, workflow: wfOk }] }, { perfil: 'DEV' })).status === 403 && api.chamadas.length === 0, 'DEV nao escreve em instancia nenhuma (nenhuma chamada a API)')
   confere((await n8n(api, { acao: 'instancias' }, { perfil: 'admin' })).status === 200, 'perfil em minusculas vale')
   confere((await n8n(api, { acao: 'instancias' }, { config: { emailsPermitidos: ['outro@citel.com.br'] } })).status === 403, 'lista de e-mails: quem nao esta nela leva 403')
   confere((await n8n(api, { acao: 'instancias' }, { config: { emailsPermitidos: ['gabriel@citel.com.br'] } })).status === 200, 'lista de e-mails: quem esta nela passa')
@@ -396,6 +413,9 @@ async function parte3() {
   await invalido({ acao: 'criar-workflows', ...base, itens: [{ chave: 'a', workflow: { ...wfOk, pinData: { x: 'a'.repeat(8_100_000) } } }] }, 400, 'grande demais', 'workflow acima de 8 MB')
   await invalido({ acao: 'atualizar-workflows', ...base, itens: [{ chave: 'a', id: '../../x', workflow: wfOk }] }, 400, 'ID do workflow', 'id de atualizacao malformado')
   await invalido({ acao: 'criar-pastas', ...base, itens: 'nao e lista' }, 400, '1 a 25', 'itens nao e lista')
+  await invalido({ acao: 'publicar-workflows', ...base, itens: [{ chave: 'a', id: '../../x' }] }, 400, 'ID do workflow', 'id de publicacao malformado')
+  await invalido({ acao: 'publicar-workflows', ...base, itens: [] }, 400, '1 a 25', 'publicar sem itens')
+  await invalido({ acao: 'publicar-workflows', instancia: 'outra_instancia', itens: [{ chave: 'a', id: 'W1' }] }, 403, 'não está liberada', 'publicar em instancia fora da lista')
 
   secao('Workflow do n8n: preparo e respostas')
   api = criarApi()
@@ -414,6 +434,35 @@ async function parte3() {
   confere(/^HTTP 400 - request\.body/.test(porChave.api.erro), 'erro da API vem com o motivo: ' + porChave.api.erro)
   confere(porChave.rede.erro === 'ECONNRESET', 'falha de rede vira erro do item')
   confere(r.log.qtd === 1 && r.log.nomes === 'Bom', 'a auditoria registra so o que foi criado')
+
+  secao('Workflow do n8n: publicar')
+  api = criarApi()
+  const w1 = { id: 'WPUB1', name: 'Publicavel' }; const w2 = { id: 'WPUB2', name: 'SUBINATIVO precisa de outro' }
+  api.wfs.push(w1, w2)
+  r = await n8n(api, { acao: 'publicar-workflows', ...base, itens: [{ chave: 'a', id: 'WPUB1', nome: 'Publicavel' }, { chave: 'b', id: 'WPUB2' }, { chave: 'c', id: 'NAOEXISTE' }] })
+  const pub = Object.fromEntries(r.corpo.resultados.map((x) => [x.chave, x]))
+  confere(r.status === 200 && pub.a.id === 'WPUB1' && w1.active === true, 'publica o workflow que existe')
+  confere(/^HTTP 400 - Workflow has issues/.test(pub.b.erro) && !w2.active, 'erro da API ao publicar volta como erro do item: ' + pub.b.erro)
+  confere(/^HTTP 404/.test(pub.c.erro), 'workflow inexistente: erro 404 do item')
+  confere(JSON.stringify(api.publicados) === '["WPUB1"]' && api.chamadas.every((c) => c.startsWith('POST') && c.endsWith('/activate')), 'so chamou /activate, uma vez por item, na ordem enviada')
+  confere(r.log && r.log.qtd === 1 && r.log.nomes === 'Publicavel (falharam: 2)', 'publicar fica registrado (quantos deram certo, nomes e quantos falharam): ' + JSON.stringify(r.log))
+  await invalido({ acao: 'publicar-workflows', ...base, itens: [{ chave: 'a', id: 'W1', nome: 'x'.repeat(129) }] }, 400, 'nome inválido', 'nome longo na publicacao')
+
+  secao('Workflow do n8n: registro de substituicoes')
+  api = criarApi()
+  api.wfs.push({ id: 'WSUB1', name: 'Antigo 1' }, { id: 'WSUB2', name: 'Antigo 2' })
+  r = await n8n(api, { acao: 'atualizar-workflows', ...base, itens: [
+    { chave: 'a', id: 'WSUB1', motivo: 'substituicao', workflow: { ...wfOk, name: 'Novo 1' } },
+    { chave: 'b', id: 'WSUB2', motivo: 'substituicao', workflow: { ...wfOk, name: 'Novo 2' } },
+    { chave: 'c', id: 'NAOEXISTE', motivo: 'substituicao', workflow: { ...wfOk, name: 'Falha' } },
+  ] })
+  confere(r.status === 200 && r.log && r.log.qtd === 2 && r.log.nomes === 'Novo 1 | Novo 2', 'substituicao registra so o que deu certo: ' + JSON.stringify(r.log))
+  r = await n8n(api, { acao: 'atualizar-workflows', ...base, itens: [{ chave: 'a', id: 'WSUB1', motivo: 'referencias', workflow: { ...wfOk, name: 'Novo 1' } }, { chave: 'b', id: 'WSUB2', workflow: { ...wfOk, name: 'Novo 2' } }] })
+  confere(r.status === 200 && r.log && r.log.qtd === 0, 'religar chamadas (motivo "referencias" ou sem motivo) nao conta como substituicao')
+  await invalido({ acao: 'atualizar-workflows', ...base, itens: [{ chave: 'a', id: 'WSUB1', motivo: 'apagar', workflow: wfOk }] }, 400, 'motivo inválido', 'motivo desconhecido')
+  const houve = wfN8n.nodes.find((n) => n.name === 'Houve Substituicao?')
+  confere(houve && wfN8n.connections['Houve Substituicao?'].main[0][0].node === 'Registrar Substituicao' && wfN8n.connections['Houve Substituicao?'].main[1][0].node === 'Responder Atualizacoes', 'so passa pelo registro quando houve substituicao')
+  confere(wfN8n.connections['Registrar Publicacao'].main[0][0].node === 'Responder Publicacoes' && wfN8n.nodes.find((n) => n.name === 'Responder Publicacoes').parameters.responseBody.includes("Montar Resposta (publicar)"), 'publicar registra e responde com o corpo montado antes do registro')
 
   secao('Integracao: o executor do portal contra o n8n simulado')
   const chama = [{ id: 'n', name: 'C', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1, position: [0, 0], parameters: { workflowId: { __rl: true, value: 'OR_B', mode: 'id' } } }]
@@ -440,10 +489,139 @@ async function parte3() {
   confere(!('active' in wA) && !('tags' in wA) && !String(wA.id).startsWith('OR_'), 'nada de active/tags/ID de origem foi para o n8n')
 }
 
+async function parte4() {
+  const chama = (idAlvo, nomeAlvo, extra = {}) => ({ id: 'n' + idAlvo, name: 'Chama ' + idAlvo, type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1, position: [0, 0], parameters: { workflowId: { __rl: true, value: idAlvo, mode: 'list', cachedResultName: nomeAlvo } }, ...extra })
+  const http = (idCred) => ({ id: 'h', name: 'H', type: 'n8n-nodes-base.httpRequest', typeVersion: 4, position: [0, 0], parameters: {}, credentials: { n8nApi: { id: idCred, name: idCred } } })
+  const opcoesBase = { destinoId: null, subpasta: '', caminhoCompleto: true, conflito: 'substituir', remapearReferencias: true }
+  const pastasDest = [{ id: 'P1', nome: 'Climba', pai: null }, { id: 'P2', nome: 'Subs', pai: 'P1' }, { id: 'P3', nome: 'Outro', pai: null }, { id: 'P4', nome: 'Subs2', pai: 'P1' }]
+  const destino = (lista, porPasta) => ({ pastas: pastasDest, porPasta: new Map(Object.entries(porPasta)), ids: new Set(lista.map((l) => l.id)), lista })
+  const zip = montarZip([{ nome: 'Climba/Produto_Item.json', conteudo: JSON.stringify(wf('Produto_Item', { id: 'OR_PI', nodes: [chama('OR_REQ', 'SUB_Request'), http('ORIG_CRED')] })) }])
+  const origem = await M.lerOrigem([new File([zip], 'c.zip')])
+  const todos = origem.workflows
+  const PI = { id: 'W_PI', nome: 'Produto_Item', pasta: 'P1' }
+  const plano = (lista, opcoes = {}) => M.montarPlano({ selecionados: todos, todos, opcoes: { ...opcoesBase, ...opcoes }, destino: destino(lista, { P1: new Map([['produto_item', 'W_PI']]) }) })
+
+  secao('Chamadas de fora da selecao: achar o alvo pelo nome no destino')
+  let p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }])
+  confere(p.itens[0].acao === 'substituir' && p.itens[0].idExistente === 'W_PI', 'o Produto_Item existente sera substituido')
+  confere(p.referencias.length === 1 && p.referencias[0].como === 'unica' && p.referencias[0].destinoId === 'W_REQ1' && p.referencias[0].nome === 'SUB_Request', 'um unico candidato com o nome do node: resolvido')
+  confere(!p.avisos.some((a) => a.tipo.startsWith('chamada')), 'chamada resolvida nao gera aviso')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }, { id: 'W_REQ3', nome: 'sub_request', pasta: 'P3' }])
+  confere(p.referencias[0].como === 'proxima' && p.referencias[0].destinoId === 'W_REQ1' && p.referencias[0].candidatos.length === 2, 'dois candidatos: vence a pasta mais proxima de quem chama')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }, { id: 'W_REQ2', nome: 'SUB_Request', pasta: 'P1' }])
+  confere(p.referencias[0].como === 'mesma-pasta' && p.referencias[0].destinoId === 'W_REQ2', 'candidato na mesma pasta de quem chama vence')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }, { id: 'W_REQ4', nome: 'SUB_Request', pasta: 'P4' }])
+  confere(p.referencias[0].como === 'ambigua' && p.referencias[0].destinoId === null && p.avisos.some((a) => a.tipo === 'chamada-ambigua'), 'empate de distancia: ambigua, com aviso')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }, { id: 'W_REQ4', nome: 'SUB_Request', pasta: 'P4' }], { escolhas: { OR_REQ: 'W_REQ4' } })
+  confere(p.referencias[0].como === 'escolhida' && p.referencias[0].destinoId === 'W_REQ4' && !p.avisos.some((a) => a.tipo === 'chamada-ambigua'), 'a escolha da pessoa resolve o empate')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }, { id: 'W_REQ4', nome: 'SUB_Request', pasta: 'P4' }], { escolhas: { OR_REQ: '' } })
+  confere(p.referencias[0].como === 'deixada' && p.referencias[0].destinoId === null && !p.avisos.some((a) => a.tipo.startsWith('chamada')), '"deixar como esta" nao gera aviso')
+  p = plano([PI])
+  confere(p.referencias[0].como === 'nao-encontrada' && p.avisos.some((a) => a.tipo === 'chamada-sem-destino' && a.exemplos[0].includes('SUB_Request')), 'sem candidato: aviso com o nome do node')
+  p = plano([PI, { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }], { remapearReferencias: false })
+  confere(p.referencias.length === 0, 'sem ligar os workflows nao procura alvos')
+  p = plano([PI, { id: 'OR_REQ', nome: 'Qualquer', pasta: 'P3' }])
+  confere(p.referencias.length === 0, 'o ID de origem ja existe no destino (mesma instancia): nada a resolver')
+
+  secao('Aviso: o ID do arquivo ja existe em OUTRA pasta do destino (copia por engano)')
+  // Produto_Item do arquivo tem o ID OR_PI; no destino esse ID existe, mas dentro de "Outro" e nao de "Climba"
+  const emOutra = [{ id: 'OR_PI', nome: 'Produto_Item', pasta: 'P3' }]
+  const planoEmOutra = M.montarPlano({ selecionados: todos, todos, opcoes: opcoesBase, destino: destino(emOutra, {}) })
+  const avisoId = planoEmOutra.avisos.find((a) => a.tipo === 'id-em-outra-pasta')
+  confere(planoEmOutra.itens[0].acao === 'criar' && avisoId && avisoId.exemplos[0].includes('Outro') && /1 workflow/.test(avisoId.texto), 'copia de ID que existe em outra pasta: avisa e mostra onde ele esta: ' + (avisoId && avisoId.exemplos[0]))
+  const planoMesma = M.montarPlano({ selecionados: todos, todos, opcoes: opcoesBase, destino: destino([{ id: 'OR_PI', nome: 'Produto_Item', pasta: 'P1' }], { P1: new Map([['produto_item', 'OR_PI']]) }) })
+  confere(planoMesma.itens[0].acao === 'substituir' && !planoMesma.avisos.some((a) => a.tipo === 'id-em-outra-pasta'), 'mesma pasta e mesmo nome: substitui, sem aviso')
+  confere(!plano([PI]).avisos.some((a) => a.tipo === 'id-em-outra-pasta'), 'ID que nao existe no destino: sem aviso')
+
+  // servidor simulado com workflows que ja existem
+  const existente = (extra = {}) => ({ id: 'W_PI', name: 'Produto_Item', active: true, nodes: [{ ...http('DEST_CRED') }, { id: 'so-dest', name: 'S', type: 'n8n-nodes-base.set', typeVersion: 1, position: [0, 0], parameters: {} }], connections: {}, settings: {}, ...extra })
+  const criarSrv = ({ existentes = [existente()], falharLeitura = false, falharPublicar = null } = {}) => {
+    const s = { wfs: new Map(existentes.map((x) => [x.id, JSON.parse(JSON.stringify(x))])), publicados: [], leituras: 0, motivos: [], nomesPublicacao: [] }
+    s.cliente = {
+      criarPastas: async () => [],
+      criarWorkflows: async () => [],
+      atualizarWorkflows: async (i, itens) => itens.map((x) => { s.motivos.push(x.motivo); const w = s.wfs.get(x.id); if (!w) return { chave: x.chave, erro: '404' }; Object.assign(w, JSON.parse(JSON.stringify(x.workflow))); return { chave: x.chave, id: x.id } }),
+      lerExistentes: async (i, ids) => { s.leituras++; if (falharLeitura) throw new Error('sem acesso'); return new Map(ids.filter((id) => s.wfs.has(id)).map((id) => [id, JSON.parse(JSON.stringify(s.wfs.get(id)))])) },
+      publicarWorkflows: async (i, itens) => itens.map((x) => { s.nomesPublicacao.push(x.nome); if (falharPublicar === x.id) return { chave: x.chave, erro: 'HTTP 400 - sub-workflow not published' }; s.publicados.push(x.id); return { chave: x.chave, id: x.id } }),
+    }
+    return s
+  }
+  const rodar = (s, lista, opcoes = {}, idsExistentes) => {
+    const o = { ...opcoesBase, ...opcoes }
+    const pl = M.montarPlano({ selecionados: todos, todos, opcoes: o, destino: destino(lista, { P1: new Map([['produto_item', 'W_PI']]) }) })
+    return M.executarImportacao({ instancia: 'x', plano: pl, selecionados: todos, opcoes: o, cliente: s.cliente, aoProgresso: () => {}, idsExistentes })
+  }
+  const REQ = { id: 'W_REQ1', nome: 'SUB_Request', pasta: 'P2' }
+
+  secao('Substituicao: credenciais do destino, chamadas e republicacao')
+  let s = criarSrv({ existentes: [existente(), { id: 'W_REQ1', name: 'SUB_Request', active: true, nodes: [], connections: {}, settings: {} }] })
+  let r = await rodar(s, [PI, REQ], {}, new Set(['W_PI', 'W_REQ1']))
+  const gravado = s.wfs.get('W_PI')
+  confere(r.substituidos.length === 1 && r.falhas.length === 0 && r.criados.length === 0, 'substituiu 1 workflow, sem criar copia')
+  confere(gravado.nodes.find((n) => n.name === 'H').credentials.n8nApi.id === 'DEST_CRED' && r.credenciaisMantidas === 1, 'a credencial do DESTINO foi mantida (nao a da origem)')
+  confere(gravado.nodes.find((n) => n.name === 'Chama OR_REQ').parameters.workflowId.value === 'W_REQ1', 'a chamada fixa foi trocada pelo ID do mesmo workflow no destino (achado pelo nome)')
+  confere(r.referenciasAtualizadas === 1 && r.referenciasComFalha.length === 0, 'a chamada foi religada na fase 3')
+  confere(JSON.stringify(s.motivos) === '["substituicao","referencias"]', 'o executor marca a substituicao e o religar das chamadas com motivos diferentes: ' + JSON.stringify(s.motivos))
+  confere(s.nomesPublicacao.join() === 'Produto_Item', 'a publicacao leva o nome do workflow (para o registro)')
+  confere(r.chamadasQuebradas.length === 0, 'conferencia: nenhuma chamada quebrada')
+  confere(JSON.stringify(s.publicados) === '["W_PI"]' && r.publicados.length === 1, 'o que estava publicado foi publicado de novo')
+  confere(todos[0].json.nodes.find((n) => n.name === 'H').credentials.n8nApi.id === 'ORIG_CRED', 'o JSON da origem em memoria nao foi alterado pela heranca de credenciais')
+
+  s = criarSrv({ existentes: [existente()] })
+  r = await rodar(s, [PI], {}, new Set(['W_PI']))
+  confere(r.chamadasQuebradas.length === 1 && r.chamadasQuebradas[0].id === 'OR_REQ' && r.chamadasQuebradas[0].chamado === 'SUB_Request' && r.chamadasQuebradas[0].nome === 'Produto_Item', 'conferencia: chamada sem alvo no destino aparece como quebrada (com o nome)')
+  s = criarSrv({ existentes: [existente()] })
+  r = await rodar(s, [PI], {})
+  confere(r.chamadasQuebradas.length === 0, 'sem a lista de IDs do destino a conferencia nao roda (evita falso alarme)')
+
+  s = criarSrv({ existentes: [existente({ active: false }), { id: 'W_REQ1', name: 'SUB_Request', active: true, nodes: [], connections: {}, settings: {} }] })
+  r = await rodar(s, [PI, REQ])
+  confere(s.publicados.length === 0 && r.publicados.length === 0, 'workflow que estava inativo nao e publicado')
+  s = criarSrv({ existentes: [existente(), { id: 'W_REQ1', name: 'SUB_Request', active: true, nodes: [], connections: {}, settings: {} }] })
+  r = await rodar(s, [PI, REQ], { republicar: false })
+  confere(s.publicados.length === 0, 'republicar desligado: nada e publicado')
+
+  s = criarSrv({ existentes: [existente(), { id: 'W_REQ1', name: 'SUB_Request', active: true, nodes: [], connections: {}, settings: {} }], falharPublicar: 'W_PI' })
+  r = await rodar(s, [PI, REQ])
+  confere(r.publicacaoComFalha.length === 1 && r.publicacaoComFalha[0].erro.includes('sub-workflow') && r.publicados.length === 0, 'falha ao publicar vai para o resultado com o motivo')
+
+  s = criarSrv({ existentes: [existente()], falharLeitura: true })
+  r = await rodar(s, [PI, REQ])
+  confere(r.avisos.length === 1 && /não consegui ler/i.test(r.avisos[0]) && r.substituidos.length === 1, 'falha ao ler os existentes: avisa e substitui mesmo assim')
+  confere(s.wfs.get('W_PI').nodes.find((n) => n.name === 'H').credentials.n8nApi.id === 'ORIG_CRED' && s.publicados.length === 0, 'sem leitura: credencial da origem e nada publicado de novo')
+
+  secao('Substituicao: ordem de publicacao (quem e chamado antes de quem chama)')
+  const ordenar = async (selecao) => {
+    const zip2 = montarZip([
+      { nome: 'T/A.json', conteudo: JSON.stringify(wf('A', { id: 'OR_A', nodes: [chama('OR_B', 'B')] })) },
+      { nome: 'T/B.json', conteudo: JSON.stringify(wf('B', { id: 'OR_B', nodes: [chama('OR_C', 'C')] })) },
+      { nome: 'T/C.json', conteudo: JSON.stringify(wf('C', { id: 'OR_C' })) },
+    ])
+    const o2 = await M.lerOrigem([new File([zip2], 't.zip')])
+    const sel = o2.workflows.filter((w) => selecao.includes(w.nome))
+    const lista = [{ id: 'W_A', nome: 'A', pasta: 'P1' }, { id: 'W_B', nome: 'B', pasta: 'P1' }, { id: 'W_C', nome: 'C', pasta: 'P1' }]
+    const dest = { pastas: pastasDest, porPasta: new Map([['P1', new Map([['a', 'W_A'], ['b', 'W_B'], ['c', 'W_C']])]]), ids: new Set(lista.map((l) => l.id)), lista }
+    const srv2 = criarSrv({ existentes: lista.map((l) => ({ id: l.id, name: l.nome, active: true, nodes: [], connections: {}, settings: {} })) })
+    const op = { ...opcoesBase, destinoId: null, caminhoCompleto: false, subpasta: '' }
+    const pl = M.montarPlano({ selecionados: sel, todos: o2.workflows, opcoes: { ...op, destinoId: 'P1' }, destino: dest })
+    const res = await M.executarImportacao({ instancia: 'x', plano: pl, selecionados: sel, opcoes: { ...op, destinoId: 'P1' }, cliente: srv2.cliente, aoProgresso: () => {}, idsExistentes: dest.ids })
+    return { srv2, res }
+  }
+  let o = await ordenar(['A', 'B', 'C'])
+  confere(o.res.substituidos.length === 3 && JSON.stringify(o.srv2.publicados) === '["W_C","W_B","W_A"]', 'cadeia A>B>C: publica C, depois B, depois A: ' + JSON.stringify(o.srv2.publicados))
+  confere(o.res.chamadasQuebradas.length === 0, 'cadeia inteira substituida: nenhuma chamada quebrada')
+  const ligado = o.srv2.wfs.get('W_A').nodes.find((n) => n.name === 'Chama OR_B').parameters.workflowId.value
+  confere(ligado === 'W_B', 'A chama o B do destino (ID mantido): ' + ligado)
+  o = await ordenar(['A', 'B'])
+  const aChamaC = o.srv2.wfs.get('W_B').nodes.find((n) => n.name === 'Chama OR_C').parameters.workflowId.value
+  confere(aChamaC === 'W_C' && JSON.stringify(o.srv2.publicados) === '["W_B","W_A"]', 'substituicao PARCIAL (so A e B): o B passa a chamar o C que ja existe no destino (achado pelo nome), que era o defeito do cenario 5')
+}
+
 try {
   await parte1()
   await parte2()
   await parte3()
+  await parte4()
 } catch (e) {
   console.error('ERRO NO TESTE:', e)
   process.exit(1)

@@ -143,6 +143,86 @@ export function analisarReferencias(workflow: Json): Referencias {
   return { ids: [...ids], dinamicas }
 }
 
+export interface ChamadaNode {
+  /** ID fixo do workflow chamado. */
+  id: string
+  /** Nome guardado no seletor do node (`cachedResultName`); nulo quando o node não traz. */
+  nome: string | null
+}
+
+/**
+ * As chamadas por ID fixo feitas pelos nodes (sem o errorWorkflow e os callerIds), com o nome do workflow chamado
+ * quando o node guarda. É o que permite achar o mesmo workflow no destino pelo nome.
+ */
+export function listarChamadasDosNodes(workflow: Json): ChamadaNode[] {
+  const saida: ChamadaNode[] = []
+  for (const node of Array.isArray(workflow.nodes) ? workflow.nodes : []) {
+    if (!ehObjeto(node) || !TIPOS_CHAMADA.test(String(node.type ?? ''))) {
+      continue
+    }
+    const parametros = ehObjeto(node.parameters) ? node.parameters : {}
+    if (typeof parametros.source === 'string' && parametros.source !== 'database') {
+      continue
+    }
+    const { id } = lerIdDoNode(parametros)
+    if (!id) {
+      continue
+    }
+    const bruto = parametros.workflowId
+    const nome = ehObjeto(bruto) && typeof bruto.cachedResultName === 'string' && bruto.cachedResultName.trim() ? bruto.cachedResultName.trim() : null
+    saida.push({ id, nome })
+  }
+  return saida
+}
+
+/** IDs que o workflow precisa que existam para funcionar: os dos nodes de chamada e o errorWorkflow. */
+export function idsDeChamadaFixos(workflow: Json): string[] {
+  const ids = new Set(listarChamadasDosNodes(workflow).map((c) => c.id))
+  const configuracoes = ehObjeto(workflow.settings) ? workflow.settings : {}
+  if (typeof configuracoes.errorWorkflow === 'string' && configuracoes.errorWorkflow.trim()) {
+    ids.add(configuracoes.errorWorkflow.trim())
+  }
+  return [...ids]
+}
+
+/**
+ * Na substituição, o workflow novo traz as credenciais da origem. Aqui elas voltam a ser as do destino: para cada
+ * node de mesmo nome e tipo no workflow que já existia, o tipo de credencial que ele já usava vence. O que o node
+ * novo tem e o antigo não tinha (ou um node que não existia) fica como veio. Devolve quantas credenciais mudaram.
+ */
+export function herdarCredenciais(novo: WorkflowParaCriar, existente: Json): number {
+  const antigos = new Map<string, Json>()
+  for (const node of Array.isArray(existente.nodes) ? existente.nodes : []) {
+    if (ehObjeto(node) && ehObjeto(node.credentials)) {
+      antigos.set(`${String(node.type)}\u0000${String(node.name)}`, node.credentials)
+    }
+  }
+  let trocas = 0
+  for (const node of novo.nodes) {
+    if (!ehObjeto(node.credentials)) {
+      continue
+    }
+    const antigas = antigos.get(`${String(node.type)}\u0000${String(node.name)}`)
+    if (!antigas) {
+      continue
+    }
+    // Objeto novo: o `credentials` do node é o mesmo do JSON da origem, que não pode mudar.
+    const credenciais: Json = { ...node.credentials }
+    let mudou = false
+    for (const tipo of Object.keys(credenciais)) {
+      if (ehObjeto(antigas[tipo]) && JSON.stringify(antigas[tipo]) !== JSON.stringify(credenciais[tipo])) {
+        credenciais[tipo] = JSON.parse(JSON.stringify(antigas[tipo]))
+        trocas += 1
+        mudou = true
+      }
+    }
+    if (mudou) {
+      node.credentials = credenciais
+    }
+  }
+  return trocas
+}
+
 export interface ResultadoRemapeamento {
   workflow: Json
   /** Quantas referências foram trocadas. */

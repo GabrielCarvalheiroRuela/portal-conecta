@@ -186,13 +186,14 @@ Como funciona por baixo (código em `src/importacao/`, sem dependências novas):
   escolhê-las nos nodes) e as tags não vão.
 - Quem escreve é o webhook `portal-wf-importar` (workflow **Portal_WF_Importar**, `/wf-importar` no nginx e
   no Vite), com ADMIN, lista de instâncias liberadas e uma credencial de **escrita** que só existe no n8n.
-  Cada importação fica em `portal_wf_log`. Instalação e configuração: [`n8n/LEIAME.md`](n8n/LEIAME.md).
+  Cada importação fica em `portal_wf_log`. O workflow fica no n8n, não neste repositório.
 
 Se algo falhar no meio, o que foi criado fica; importar a mesma seleção de novo com "pular" continua de onde
 parou. Em desenvolvimento, `VITE_MOCK_WF=1` simula o webhook (a instância "Automaker Dev Geral (simulado)").
 
-`npm run test:importacao` roda 118 conferências, sem navegador e sem n8n: leitor de ZIP, plano, executor e o
-código real dos nodes de `n8n/Portal_WF_Importar.json` contra uma API do n8n simulada com o esquema estrito.
+`npm run test:importacao` roda as conferências, sem navegador e sem n8n: leitor de ZIP, plano, executor e, se
+`PORTAL_WF_IMPORTAR_JSON` apontar para o JSON do workflow exportado do n8n, o código real dos nodes dele contra uma
+API do n8n simulada com o esquema estrito (sem a variável, essa parte é pulada).
 
 ## Build e publicação
 
