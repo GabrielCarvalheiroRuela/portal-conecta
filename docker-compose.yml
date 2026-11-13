@@ -2,6 +2,7 @@ services:
   conecta-onboarding:
     build:
       context: .
+      no_cache: true
       args:
         # Públicas por design — o Vite inlina estes valores no bundle.
         VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
