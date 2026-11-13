@@ -120,6 +120,11 @@ export interface DadosSituacaoIntegracao {
   situacao: SituacaoIntegracao
 }
 
+/** Corpo do PATCH /integracoes/{codigoIntegracao}/{codigoCliente}/webservice (qualquer usuário interno). */
+export interface DadosWebserviceIntegracao {
+  urlWebservice: string
+}
+
 /** Corpo do PATCH: só o que mudou. Campo ausente preserva o valor atual. */
 export interface DadosEdicaoIntegracao {
   urlWebservice?: string

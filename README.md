@@ -87,7 +87,8 @@ promove nem rebaixa ninguém.
 | Plataformas | só a tabela das cadastradas | + cadastrar plataforma e a matriz de funcionalidades, marcando a situação (engrenagem) | tudo, inclusive criar, editar e excluir funcionalidade |
 | Nova integração | não | sim | sim |
 | Situação da integração (botão no popup da engrenagem em Integrações) | ATIVO e INATIVO (não mexe numa integração em desenvolvimento) | ATIVO, INATIVO e EM DESENVOLVIMENTO | ATIVO, INATIVO e EM DESENVOLVIMENTO |
-| Editar webservice, URL da API e chave privada (popup da engrenagem) | não | não | sim |
+| Editar o webservice do ERP (popup da engrenagem, `PATCH .../webservice`) | sim | sim | sim |
+| Editar URL da API e chave privada (popup da engrenagem) | não | não | sim |
 | Workflows | não | sim (exportar) | sim (exportar e importar) |
 
 - **API:** quem não tem o perfil recebe **403**. Lojistas (o n8n) passam como antes, e `POST /cadastro` continua aberto.

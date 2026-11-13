@@ -5,6 +5,7 @@ import {
   SITUACOES,
   type DadosEdicaoIntegracao,
   type DadosSituacaoIntegracao,
+  type DadosWebserviceIntegracao,
   type IntegracaoEdicao,
   type IntegracaoResumo,
   type SituacaoIntegracao,
@@ -17,7 +18,7 @@ import { IconeEngrenagem, IconeX } from './ui/Icones'
 import { Textarea } from './ui/Textarea'
 
 interface Props {
-  /** A linha da lista em que a engrenagem foi clicada: identidade e situação atual. O resto, só o ADM, vem da API. */
+  /** A linha da lista em que a engrenagem foi clicada: identidade, situação e webservice. O resto, só o ADM, vem da API. */
   integracao: IntegracaoResumo
   aoFechar: () => void
   /** Chamado depois de salvar, com a linha da lista e os rótulos do que mudou. */
@@ -52,6 +53,11 @@ function formularioDe(dados: IntegracaoEdicao): Formulario {
     urlApi: dados.urlApi ?? '',
     chavePrivada: semCr(dados.chavePrivada ?? ''),
   }
+}
+
+/** Para quem não é ADM: só o webservice, que a linha da lista já traz. URL da API e chave nem são carregadas. */
+function formularioDoResumo(integracao: IntegracaoResumo): Formulario {
+  return { urlWebservice: integracao.urlWebservice ?? '', urlApi: '', chavePrivada: '' }
 }
 
 /** Quais campos o usuário realmente mexeu. URLs ignoram espaços nas pontas, como o servidor faz. */
@@ -96,14 +102,20 @@ const FOCAVEIS =
  * Popup de configuração de uma integração, aberto pela engrenagem da lista, para qualquer usuário.
  *
  * Todos alteram a situação pelo botão colorido do cabeçalho (ATIVO, INATIVO, EM DESENVOLVIMENTO). O USR só alterna
- * entre ATIVO e INATIVO; DEV e ADM também usam EM DESENVOLVIMENTO. Webservice, URL da API e chave privada são só do ADM:
- * para os demais perfis esses campos nem aparecem, e a chave privada nem é carregada. A API confere o perfil de novo
- * (403) e registra cada alteração no LOGINT. Só o que mudou vai para a API.
+ * entre ATIVO e INATIVO; DEV e ADM também usam EM DESENVOLVIMENTO. Todos alteram o webservice do ERP: quem não é ADM
+ * edita o valor da linha da lista e grava pelo PATCH .../webservice, que não devolve segredo. URL da API e chave privada
+ * são só do ADM: para os demais perfis esses campos nem aparecem, e a chave privada nem é carregada. A API confere o
+ * perfil de novo (403) e registra cada alteração no LOGINT. Só o que mudou vai para a API.
  */
 export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props) {
-  const [dados, setDados] = useState<IntegracaoEdicao | null>(null)
+  // Esconder o que não é do perfil é conforto: a API responde 403 a quem tentar a rota por fora.
+  const admin = ehAdmin()
+  const podeEmDesenvolvimento = temPerfil('DEV')
+
   const [erroCarga, setErroCarga] = useState<string | null>(null)
-  const [form, setForm] = useState<Formulario | null>(null)
+  /** O que está gravado, no formato do formulário. O ADM espera a API; os demais partem da linha da lista. */
+  const [original, setOriginal] = useState<Formulario | null>(() => (admin ? null : formularioDoResumo(integracao)))
+  const [form, setForm] = useState<Formulario | null>(original)
   const [erros, setErros] = useState<Erros>({})
   const [erroApi, setErroApi] = useState<string | null>(null)
   const [enviando, setEnviando] = useState(false)
@@ -113,11 +125,6 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
 
   const dialogo = useRef<HTMLDivElement>(null)
 
-  // Esconder o que não é do perfil é conforto: a API responde 403 a quem tentar a rota por fora.
-  const admin = ehAdmin()
-  const podeEmDesenvolvimento = temPerfil('DEV')
-
-  const original = useMemo(() => (dados ? formularioDe(dados) : null), [dados])
   const alterados = useMemo(() => (original && form ? camposAlterados(original, form) : []), [original, form])
   // O USR só alterna entre ATIVO e INATIVO: não vê EM DESENVOLVIMENTO e, se a integração já está nela, o botão só exibe.
   const situacaoTravada = !podeEmDesenvolvimento && situacaoGravada === 'D'
@@ -140,7 +147,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
         if (cancelado) {
           return
         }
-        setDados(resposta)
+        setOriginal(formularioDe(resposta))
         setForm(formularioDe(resposta))
         setSituacao(resposta.situacao)
         setSituacaoGravada(resposta.situacao)
@@ -167,13 +174,13 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
     }
   }, [])
 
-  // Quando os dados chegam, o cursor vai para o que o perfil edita: o primeiro campo (ADM) ou o botão de situação.
-  const carregado = !admin || form !== null
+  // Quando os dados chegam, o cursor vai para o primeiro campo editável: o webservice, que todo perfil altera.
+  const carregado = form !== null
   useEffect(() => {
     if (carregado) {
-      document.getElementById(admin ? 'editUrlWebservice' : 'botaoSituacao')?.focus()
+      document.getElementById('editUrlWebservice')?.focus()
     }
-  }, [carregado, admin])
+  }, [carregado])
 
   /** Esc e clique no fundo só fecham se nada foi digitado: uma chave colada não se perde sem querer. */
   function fecharSeLimpo() {
@@ -235,14 +242,21 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
     try {
       // Só o que mudou: o que ficar de fora o servidor preserva, e nada de log para o que não mudou.
       if (form && alterados.length > 0) {
-        const corpo: DadosEdicaoIntegracao = {}
-        for (const campo of alterados) {
-          corpo[campo] = campo === 'chavePrivada' ? form[campo] : form[campo].trim()
+        let gravado: Formulario
+        if (admin) {
+          const corpo: DadosEdicaoIntegracao = {}
+          for (const campo of alterados) {
+            corpo[campo] = campo === 'chavePrivada' ? form[campo] : form[campo].trim()
+          }
+          gravado = formularioDe(await apiPatch<IntegracaoEdicao>(caminho, corpo))
+        } else {
+          // Quem não é ADM só tem o webservice no formulário, e a rota dele só aceita esse campo.
+          const corpo: DadosWebserviceIntegracao = { urlWebservice: form.urlWebservice.trim() }
+          gravado = formularioDoResumo(await apiPatch<IntegracaoResumo>(`${caminho}/webservice`, corpo))
         }
-        const atualizada = await apiPatch<IntegracaoEdicao>(caminho, corpo)
         // Se a situação falhar logo a seguir, estes campos já estão gravados e não voltam a contar como alterados.
-        setDados(atualizada)
-        setForm(formularioDe(atualizada))
+        setOriginal(gravado)
+        setForm(gravado)
       }
 
       if (mudouSituacao) {
@@ -297,8 +311,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {/* Só depois da carga: para o ADM a situação gravada vem junto com os dados de edição. */}
-            {carregado && !erroCarga && (
+            {/* Só depois da carga: para o ADM a situação gravada vem junto com os dados de edição. */}            {carregado && !erroCarga && (
               <BotaoSituacao
                 situacao={situacao}
                 opcoes={opcoesSituacao}
@@ -336,7 +349,7 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
               </Botao>
             </div>
           </div>
-        ) : admin && (!dados || !form) ? (
+        ) : !form ? (
           <div className="flex items-center gap-2 px-5 py-10 text-[13px] font-medium text-slate-500" aria-busy="true">
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
             Carregando integração…
@@ -359,8 +372,8 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
                 </div>
               </section>
 
-              {/* A situação não está aqui: é o botão colorido do cabeçalho. Estes campos são só do ADM. */}
-              {admin && form && (
+              {/* A situação não está aqui: é o botão colorido do cabeçalho. O webservice é de todos; o resto, só do ADM. */}
+              {form && (
                 <section aria-labelledby="secaoEdicao" className="space-y-4">
                   <h3 id="secaoEdicao" className="text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
                     Pode ser alterado
@@ -375,6 +388,8 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
                     autoComplete="off"
                     spellCheck={false}
                   />
+                  {admin && (
+                    <>
                   <Campo
                     id="editUrlApi"
                     label="URL da API da plataforma"
@@ -397,6 +412,8 @@ export function ModalEditarIntegracao({ integracao, aoFechar, aoSalvar }: Props)
                     autoComplete="off"
                     spellCheck={false}
                   />
+                    </>
+                  )}
                 </section>
               )}
             </div>
