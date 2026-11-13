@@ -4,6 +4,7 @@ import { coletaWebservices } from '../services/webservices'
 import { ROTULO_SITUACAO, SITUACOES, type IntegracaoResumo, type PlataformaResumo } from '../types/integracao'
 import { ModalEditarIntegracao } from './ModalEditarIntegracao'
 import { PedidosDoCliente } from './PedidosDoCliente'
+import { RelatorioIntegracoes } from './RelatorioIntegracoes'
 import { Alerta } from './ui/Alerta'
 import { IconeEngrenagem, IconeLink, IconeLupa, IconeSetaDireita } from './ui/Icones'
 import {
@@ -70,6 +71,8 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
   /** Integração cujo popup de edição está aberto. */
   const [emEdicao, setEmEdicao] = useState<IntegracaoResumo | null>(null)
   const [aviso, setAviso] = useState<string | null>(null)
+  // O relatório conta todas as integrações, sem filtro: recarrega quando a lista é atualizada ou editada.
+  const [versaoRelatorio, setVersaoRelatorio] = useState(0)
 
   // O filtro de plataforma segue o cadastro (aba Plataformas). Se a consulta falhar, ficam as duas
   // que a tela sempre ofereceu.
@@ -160,6 +163,14 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
       `Integração ${editada.codigoIntegracao} (${editada.nomeCliente}) atualizada: ${camposAlterados.join(', ')}.`,
     )
     carregar()
+    setVersaoRelatorio((v) => v + 1)
+  }
+
+  // Clique numa plataforma do relatório: as ativas dela (o número do chip); de novo no mesmo, limpa.
+  function filtrarPlataforma(nome: string) {
+    const jaFiltrada = plataforma === nome && ativo === 'S'
+    setPlataforma(jaFiltrada ? '' : nome)
+    setAtivo(jaFiltrada ? '' : 'S')
   }
 
   function limpar() {
@@ -169,6 +180,12 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
   }
 
   return (
+    <>
+    <RelatorioIntegracoes versao={versao + versaoRelatorio} situacao={ativo}
+      aoFiltrarSituacao={setAtivo}
+      plataforma={plataforma}
+      aoFiltrarPlataforma={filtrarPlataforma}
+    />
     <CartaoConsulta
       cabecalho={
         <>
@@ -177,7 +194,13 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
             titulo="Integrações cadastradas"
             subtitulo="Lojistas conectados às plataformas."
           />
-          <BotaoAtualizar onClick={carregar} carregando={carregando} />
+          <BotaoAtualizar
+            onClick={() => {
+              carregar()
+              setVersaoRelatorio((v) => v + 1)
+            }}
+            carregando={carregando}
+          />
         </>
       }
       filtros={
@@ -347,5 +370,6 @@ export function ListaIntegracoes({ versao = 0 }: Props) {
         )}
       </>
     </CartaoConsulta>
+    </>
   )
 }

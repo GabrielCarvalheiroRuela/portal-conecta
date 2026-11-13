@@ -50,7 +50,7 @@ const ABAS: {
   {
     id: 'consulta',
     rotulo: 'Integrações',
-    descricao: 'Integrações cadastradas por lojista. Clique no nome de um lojista para ver os pedidos dele.',
+    descricao: 'Relatório das integrações por situação e plataforma, e a lista por lojista. Clique no nome de um lojista para ver os pedidos dele.',
     Icone: IconeLink,
   },
   {
